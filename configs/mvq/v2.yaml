@@ -1,0 +1,26 @@
+# MVQ v2 (T=2), the fine-lift model `fine_recording` / `MVQRunner` loads.
+# Checkpoint verified present on disk 2026-09-13
+# (mvq_run.json + a `final/` dir with no separate step to select --
+# MEMORY "MVQ DINOv3 lifter project": v2 T=2 checkpoint trained+accepted,
+# val 0.0699 mm, mvq_t2_v2_20260906d).
+#
+#   python -m tracking.run mvq=v2 ...   # (the pipeline.yaml default)
+
+checkpoint: "${paths.ckpt_dir}/jax_mvq_runs/mvq_t2_v2_20260906d/final"
+# `final/` needs no step (MVQRunner: "a `final/` dir with no step, else the
+# run dir plus an int step or `latest`").
+step: null
+# null lets `load_mvq_model` pick the compiled-in default; set "xla" to run
+# a cuDNN-trained checkpoint on CPU (MVQRunner docstring).
+attn_impl: null
+
+# The batch the forward pass is compiled for. NOT a free performance knob:
+# short batches are padded and the padding dropped, so this is the
+# pipeline's central throughput lever, kept explicit here rather than
+# buried in a call site.
+batch: 32
+
+# `detector.mvq.policy.EXIST_THRESH` -- the shipped existence threshold,
+# made an explicit config value rather than a silent import default.
+exist_thresh: 0.5
+window_pref: own

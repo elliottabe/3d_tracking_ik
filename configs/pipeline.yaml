@@ -1,0 +1,111 @@
+# Hydra root config for the tracking pipeline driver (spec section 6).
+#
+#   python -m tracking.run recording=session0 mvq=v2 \
+#       recording.session_dir=... run.name=pose_v2          # coarse -> ... -> collect
+#   python -m tracking.run recording=session0 \
+#       stages=[fine,preprocess,ik] bout_ids=[28]
+#   python -m tracking.run recording=stairs dry_run=true     # print the plan, run nothing
+#
+# One entry point reading the same config every stage reads, so a knob a
+# stage honours is never invisible to the resume check (spec section 7).
+# `_self_` is first so this file's own values (`stages`, `bout_ids`,
+# `dry_run`, `run`) are the base that the selected groups below cannot
+# accidentally shadow.
+defaults:
+  - _self_
+  - paths: hyak
+  - anatomy: v1
+  - recording: template
+  - mvq: v2
+  - centerdetect: default
+  - preprocess: default
+  - ik: default
+  - postprocess: default
+  - viz: default
+
+# Which stages to run. `pipeline.plan.resolve` DISCARDS this list's order
+# for its own dependency order (`pipeline.stages.ordered`) and inserts the
+# two pooled-fit barriers (`fit_fly_constants`, `fit_run_floor`) wherever
+# `ik`/`postprocess` need them -- see plan.py's module docstring. Defaults
+# to the full chain; `stages=[...]` on the CLI selects a subset.
+stages:
+  - coarse
+  - gates
+  - fine
+  - kpvideo
+  - preprocess
+  - ik
+  - postprocess
+  # A rendering side output, like `kpvideo`: nothing downstream reads it, and
+  # `collect` deliberately does NOT gate on it (see slurm/graph.py's
+  # `_collect_gate`) so a bad render can never withhold the dataset h5.
+  - sidebyside
+  - collect
+
+# Which bouts to process, e.g. `bout_ids=[28]`. `null` means "every bout in
+# this run's `bouts.csv`", resolved from that file at EXECUTION time, never
+# at plan/dry-run time -- a dry run must not need `bouts.csv` to exist, even
+# against a session directory that does not exist at all.
+bout_ids: null
+
+# Print the resolved plan (stage, target, out_dir, skip reason) and execute
+# NOTHING -- no directory is created, no stage runs, no file is read beyond
+# this config itself.
+dry_run: false
+
+run:
+  # This run's output root. Every artifact in spec section 4's table lands
+  # under here: bouts/bout_00028/fly0/kp3d_filt.npz, scale.json, floor.json,
+  # session_qc.json, ...
+  root: "${paths.base_dir}/${recording.assay}/${recording.name}/${run.name}"
+  # Groups related runs of the SAME recording --
+  # distinct from `recording.name`, which identifies the recording being
+  # processed, not this particular run of the driver over it.
+  #
+  # `debug` is deliberately a name nobody would mistake for a result. Now
+  # that `run.root` lands inside the SHARED processed tree beside
+  # irreplaceable reference runs (pose_maskfree_v2, pose_mvq_v2, ...), a
+  # careless default like `pose_v2` would be one typo away from overwriting
+  # one. Name a real run explicitly: `run.name=pose_v2_20260914`.
+  name: debug
+
+  # Refuse to write into a run root this pipeline did not create. On the
+  # first write to a new root the driver drops a `.tracking_run` marker; a
+  # root that exists WITHOUT one belongs to something else -- another repo's
+  # run, a reference run, a hand-made directory -- and is not ours to write
+  # into. Set true only to deliberately adopt such a directory.
+  #
+  # This exists because `run.root` moved into the shared processed tree on
+  # 2026-09-14, where a wrong `run.name` no longer lands in an empty
+  # namespace but on top of data that cannot be regenerated.
+  allow_foreign_root: false
+
+hydra:
+  # Hydra's OWN run dir is deliberately NOT under `run.root`: Hydra creates
+  # (and chdirs into) this directory unconditionally, on every invocation,
+  # including `dry_run=true` -- pointing it at `run.root` would make even a
+  # dry run create the pipeline's output root, which never happens (a
+  # session directory that does not exist at all, and a dry run still
+  # succeeds). Its own default
+  # location (`outputs/<date>/<time>`, relative to the launch cwd) is left
+  # alone; `job.chdir=false` additionally keeps the process's cwd (and any
+  # relative path in `cfg`) exactly what the caller typed.
+  job:
+    chdir: false
+    config:
+      override_dirname:
+        exclude_keys: [paths]
+
+  # ONE directory under the processed root, interpolating nothing that can be
+  # a placeholder. Keying it on `recording.assay`/`recording.name` (as it was
+  # briefly on 2026-09-14) meant a run with no `recording=` override took the
+  # `template` defaults and created a real
+  # `processed/CHANGEME-.../CHANGEME-.../` tree in shared data.
+  #
+  # Not inside `run.root`: hydra creates this unconditionally, including on
+  # `dry_run=true`, and a dry run must leave the output root absent.
+  run:
+    dir: ${paths.base_dir}/.hydra-logs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: ${paths.base_dir}/.hydra-logs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.override_dirname}

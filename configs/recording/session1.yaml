@@ -1,0 +1,64 @@
+# Courtship Session1. PROVISIONAL: three of Session1's fourteen 2026-04-02
+# recordings have no `sex.json` review yet (feedback-courtship-sessions-
+# missing-sex-json), so any cohort built from Session1 assumes fly1=male
+# rather than measuring it -- say so in any scorecard, per Task 13.
+#
+#   python -m tracking.run recording=session1 mvq=v2 run.name=pose_v2
+#   python -m tracking.run recording=session1 recording.id=2026_04_02_12_11_50 ...
+
+# The recording within Session1. Every other field here (assay, cameras,
+# num_animals, fps, calib_dir shape) is IDENTICAL across the session's
+# fourteen recordings (verified 2026-09-14) -- only `name`, `session_dir`
+# and `bouts_csv` depend on which one, so this is one parameterized config
+# rather than fourteen near-duplicate files. `scripts/slurm/session_
+# pipeline.sh`'s `session1:<id>` / `session1:*` recording tokens (Task 20)
+# override this default via `recording.id=...`.
+id: 2026_04_02_11_52_43
+
+name: "Session1/${recording.id}"
+
+# Which assay this recording belongs to: `courtship` or `free_running`.
+#
+# This is a PATH COMPONENT, not a label. `run.root` is
+# `<data_dir>/processed/<assay>/<recording.name>/<run.name>`, which is the
+# lab's existing on-disk convention -- the reference runs this port was built
+# against live at `processed/courtship/Session0/2025_10_20_13_20_04/
+# pose_maskfree_v2`. Getting it wrong files a whole recording's outputs under
+# the wrong assay, where nothing downstream looks for them.
+assay: courtship
+
+session_dir: "${paths.data_dir}/Video_recordings/courtship/Session1/${recording.id}"
+calib_dir: "${recording.session_dir}/calibration"
+
+# sorted(glob("Cam*.yaml")) order, verified against calib_dir on disk
+# 2026-09-13 -- same 7 cameras/rig as Session0.
+cameras:
+  - Cam2012630
+  - Cam2012631
+  - Cam2012853
+  - Cam2012855
+  - Cam2012857
+  - Cam2012861
+  - Cam2012862
+
+num_animals: 2
+# Measured directly off this recording's own Cam2012630_meta.csv frame
+# timestamps 2026-09-13 (mean inter-frame dt 1.25 ms => 800.0 Hz), not
+# assumed from the template default.
+fps: 800.0
+
+# Hand-supplied bout summary, the RECORDING-level file -- same schema as
+# Session0's (`fly_id,bout_idx,start_frame,end_frame,source_fly`, `fly_id`
+# recording-level, `source_fly: both`), read by `read_bout_summary(bouts_csv,
+# session_tag=recording.name)`.
+#
+# Until 2026-09-14 this pointed at the per-fly curated file
+# (`courtship_bouts_fly0_summary.curated.csv`), which existed for only one
+# fly per recording and disagreed with the other fly's own curated bouts on
+# this session -- there was no `unified_summary.csv` to pool them
+# (task-6-report.md). The data was normalized 2026-09-14: every runnable
+# Session1 recording now has this canonical file. Two recordings
+# (2026_04_02_15_12_14, 2026_04_02_17_13_56) still have none and are the
+# ones `session1:*` skips by name (Task 20,
+# `tracking.pipeline.slurm.discover`).
+bouts_csv: "${recording.session_dir}/courtship_bout_summary.csv"

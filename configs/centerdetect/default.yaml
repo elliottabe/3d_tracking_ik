@@ -1,0 +1,31 @@
+# CenterDetect: full frames -> top-2 peaks per camera, used to (re)acquire
+# both flies at a bout's first frames when no coarse-pass seed is available
+# (the `bout_summary.csv` / no-coarse-pass route).
+#
+# CONFIRMED 2026-09-13 against `restore_centerdetect`
+# (`src/tracking/detector/centerdetect/model.py:700-725`): it calls
+# `ocp.StandardCheckpointer().restore(ckpt_dir, target=target)`, and Orbax's
+# `StandardCheckpointer.restore` takes ONE checkpoint directory, not a parent
+# holding many. The previous value here (`.../cd_focal_bg30/ckpt`) was that
+# parent -- it holds `epoch_001` ... `epoch_030` -- and was WRONG; this must
+# name a single epoch.
+#
+# Epoch chosen from the run's own `metrics.json` (30 rows) at
+# `<ckpt_dir>/jax_centerdetect_runs/cd_focal_bg30/metrics.json`:
+#
+#   epoch | two_peak_rate (up) | dists_median_px (down) | dists_p90_px (down) | fp_rate_ratio_ge_0.5 (down)
+#      4  |            1.0000  |                  5.797  |                13.903  |                      0.3477
+#     15  |            1.0000  |                  5.028  |                11.439  |                      0.3359
+#     30  |            0.9945  |                  5.028  |                11.932  |                      0.3125
+#
+# epoch_015 is the only epoch simultaneously perfect on `two_peak_rate` and
+# best on BOTH localization metrics -- chosen over epoch_030 for that reason.
+# The one honest trade-off: epoch_015's `fp_rate_ratio_ge_0.5` (spurious
+# second peak on SINGLE-fly validation frames) is 0.3359 against epoch_030's
+# 0.3125, so a single-fly-heavy workload might prefer the later epoch; the
+# courtship pipeline this port is gated on is two-fly, where `two_peak_rate`
+# is the metric that matters.
+checkpoint: "${paths.ckpt_dir}/jax_centerdetect_runs/cd_focal_bg30/ckpt/epoch_015"
+
+# `CenterDetector.__init__`'s own default.
+min_score: 0.2

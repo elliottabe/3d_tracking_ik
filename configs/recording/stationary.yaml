@@ -1,0 +1,28 @@
+# Stationary assay. Spec section 13: "Stationary is a stub. Its config
+# ships, but nothing claims it works until a real recording is run through
+# it" -- no stationary recording has been located/verified on disk, so
+# this stays a copy of recording/template.yaml's CHANGEME placeholders
+# rather than a guessed real path. Fill in and remove this comment once a
+# real stationary recording is run through the pipeline.
+#
+#   python -m tracking.run recording=stationary  # dies at RecordingSpec.validate()
+
+name: "CHANGEME-stationary"
+# Which assay this recording belongs to: `courtship` or `free_running`.
+#
+# This is a PATH COMPONENT, not a label. `run.root` is
+# `<data_dir>/processed/<assay>/<recording.name>/<run.name>`, which is the
+# lab's existing on-disk convention -- the reference runs this port was built
+# against live at `processed/courtship/Session0/2025_10_20_13_20_04/
+# pose_maskfree_v2`. Getting it wrong files a whole recording's outputs under
+# the wrong assay, where nothing downstream looks for them.
+assay: CHANGEME-courtship-or-free_running
+
+session_dir: "/CHANGEME/path/to/stationary/session"
+calib_dir: "/CHANGEME/path/to/stationary/session/calibration"
+cameras:
+  - CHANGEME-Cam1
+  - CHANGEME-Cam2
+num_animals: 1
+fps: 800.0
+bouts_csv: null

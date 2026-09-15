@@ -1,0 +1,20 @@
+# The per-frame IK solver's settings (`inverse_kinematics.perframe.
+# solver_settings_from_cfg` reads exactly this `per_frame:` block; an
+# absent key falls back to that function's OWN defaults, which are these
+# same numbers -- "the reference run's own values, so an absent key is the
+# reference behaviour rather than a jaxls default").
+#
+# `batch` is NOT a performance knob: sweeping it on 500 frames moved
+# `max|dqpos|` by 2.795e-01 between 512 and {128, 64, 32} on the reference
+# recording -- batching is supposed to be inert grouping of independent
+# frames and measurably is not (almost certainly one frame landing in a
+# different wing-pitch basin). Changing it changes results and must not be
+# tuned for speed without re-running the parity gate (spec section 11).
+per_frame:
+  n_iter: 500
+  lambda_initial: 5.0e-4
+  lambda_min: 1.0e-8
+  cost_tolerance: 1.0e-12
+  gradient_tolerance: 1.0e-14
+  parameter_tolerance: 1.0e-16
+  batch: 512

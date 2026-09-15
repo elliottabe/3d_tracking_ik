@@ -1,0 +1,65 @@
+# Template recording configuration for one multi-camera video session.
+#
+# Copy this file to configs/recording/<your-recording>.yaml and edit the
+# CHANGEME entries, then select it on the CLI:
+#
+#   python -m tracking.run recording=<your-recording>
+#
+# A "recording" is one multi-camera session of flies: where its videos and
+# calibration live, how many animals are in it, and its frame rate.
+
+# Human-readable identifier for this recording (used in logs/output paths).
+name: "CHANGEME-2026_01_01_00_00_00"
+
+# Absolute path to the directory holding this recording's per-camera videos,
+# named "<camera>.mp4" (e.g. session_dir/Cam2012630.mp4).
+# Which assay this recording belongs to: `courtship` or `free_running`.
+#
+# This is a PATH COMPONENT, not a label. `run.root` is
+# `<data_dir>/processed/<assay>/<recording.name>/<run.name>`, which is the
+# lab's existing on-disk convention -- the reference runs this port was built
+# against live at `processed/courtship/Session0/2025_10_20_13_20_04/
+# pose_maskfree_v2`. Getting it wrong files a whole recording's outputs under
+# the wrong assay, where nothing downstream looks for them.
+assay: CHANGEME-courtship-or-free_running
+
+session_dir: "/CHANGEME/path/to/session"
+
+# Absolute path to the directory holding this recording's calibration files
+# (Cam*.yaml). This directory DEFINES the canonical camera order via
+# sorted(glob("Cam*.yaml")) -- `cameras` below must list them in that exact
+# order, or RecordingSpec.validate() raises OrderMismatch rather than
+# silently permuting every camera axis downstream.
+calib_dir: "/CHANGEME/path/to/session/calibration"
+
+# Camera names, in the SAME order as sorted(calib_dir/Cam*.yaml). Do not
+# hand-order this list independently of the calibration directory.
+cameras:
+  - CHANGEME-Cam1
+  - CHANGEME-Cam2
+
+# Number of animals in this recording. 2 for courtship (two flies), 1 for
+# free-running (single fly).
+num_animals: 2
+
+# Frame rate in Hz. REQUIRED and must be > 0. Read it off the acquisition
+# settings for THIS recording; never guess it and never keep this value
+# because it looks reasonable.
+#
+# It is load-bearing twice over:
+#   - it is the sole source of the `source_hz` attribute stamped into the
+#     final analysis dataset, and
+#   - the IK's `dt` is `1 / fps` (Task 7), so every `qvel` in the dataset is
+#     scaled by it.
+# Getting it wrong therefore produces velocities that are wrong by exactly the
+# ratio of the two rates, labelled with the rate you typed here -- no NaN, no
+# error, and self-consistent. The Johnson lab courtship recordings this
+# pipeline was built on are 800 Hz, and 1/800 = 0.00125 is the `dt` the
+# reference run used.
+fps: 800.0
+
+# Optional path to a hand-supplied bout_summary.csv (bout, start_frame,
+# end_frame, n_frames, source columns). May be null, or a path that does not
+# exist yet -- that is the legitimate no-bout-summary route. `has_bout_summary`
+# is only true when this is set AND the file exists.
+bouts_csv: null

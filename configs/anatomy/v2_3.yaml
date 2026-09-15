@@ -1,0 +1,537 @@
+# Anatomy config for the v2_3 body model (`fruitfly_v2.3` + Task 10's
+# derived, adhesion-free `fruitfly_v2_3_ik/`, both in the SIBLING
+# `fruitfly_body_models` checkout -- unlike v1, this model lives OUTSIDE this
+# repo).
+#
+# DERIVED from the source repo's own `configs/anatomy/v2_3.yaml`
+# (`3d_tracking_dataset`), but every name list below was RE-verified here
+# (2026-09-13, MuJoCo, against the ACTUAL compiled
+# `fruitfly_v2_3_ik/fruitfly_v2_3_ik.xml`) rather than copied on the
+# assumption the source repo's own verification still applies to this
+# checkout's build of the model -- see `.superpowers/sdd/
+# 2026-09-13-driver-slurm-parity/task-10-report.md` for the check itself.
+# Result: `end_eff_names` (6), `body_names` (54), `joint_names` (56),
+# `wing_names` (6), `model.KP_NAMES` (50) and `model.KEYPOINT_MODEL_PAIRS`
+# values (50 bodies) are ALL already present in the model -- ZERO dropped.
+# Nothing here is a curated subset the way v1's `body_names`/`joint_names`
+# are; v2_3's XML happens to define exactly this set (see the source
+# config's own per-block comments for which head/antenna/mouthpart joints
+# and which extra tarsus/haltere/trochanter bodies exist but are
+# deliberately left out, carried over unchanged since the XML agrees).
+#
+# `cse_mesh_npz` is dropped entirely, matching v1.yaml's own decision:
+# DensePose/CSE is an explicit spec non-goal in this port.
+#
+# `model.SITES_TO_FREEZE` is NOT carried over from `v1.yaml`. v1's freeze list
+# (the four wing-vein sites) came from a MEASURED drift specific to v1's own
+# geometry (v1.yaml's comment: "WingR_V12's offset drifted 3.2x the wing's
+# own half-thickness"); nothing analogous has been measured for v2_3's wing
+# mesh, and copying the list would assert a measurement that was never made
+# on this model. Leave it empty (the schema default) until it is.
+name: v2_3
+
+# Skeleton-structural default: keypoints excluded from the Procrustes
+# alignment fit (glob patterns over keypoint names). Wing-vein markers
+# (V12/V13) move too fast to be reliable for the rigid fit -- same rationale
+# as v1.yaml, unrelated to the body model itself.
+alignment_exclude: ["*_V12", "*_V13"]
+
+# OUTSIDE this repo, unlike v1's in-repo `${repo_root:}/model`: the derived
+# v2_3_ik model lives in the SIBLING `fruitfly_body_models` checkout
+# (`scripts/build_v2_3_model.py` writes it there, beside its read-only
+# source). Expressed via the bare `${repo_root:}` resolver -- NEVER
+# `${paths.body_model_dir}` or any other `${paths.*}` reference -- for the
+# same reason v1's own `root` is a bare resolver call and not a config-tree
+# reference: `tracking.run._load_anatomy` DETACHES `cfg.anatomy` into a
+# standalone `OmegaConf` node before calling `load_anatomy` (round-tripping
+# through `to_container(resolve=False)` + `OmegaConf.create`, because v1's
+# `root: ${repo_root:}/model` bare self-reference needs a standalone root to
+# resolve -- see that function's own docstring). A detached node carries NO
+# `paths` key at all, so a `${paths.body_model_dir}`-style interpolation here
+# would resolve fine in a smoke test that composes the full pipeline config
+# and reads `cfg.anatomy` while it is still ATTACHED to that tree (exactly
+# what looks like "it works" in a first check) and then raise
+# `InterpolationResolutionError` the FIRST time `python -m tracking.run
+# anatomy=v2_3` actually calls `_load_anatomy` -- passing every test that
+# never detaches while failing the one real caller that matters. `repo_root`
+# is a bare custom resolver (registered once, at import, independent of any
+# config tree), so it resolves identically attached or detached -- exactly
+# the property v1's own `root` needs and has.
+root: ${repo_root:}/../fruitfly_body_models/fruitfly_v2_3_ik
+mjcf_path: "${root}/fruitfly_v2_3_ik.xml"
+arena_path: "${root}/floor.xml"
+
+end_eff_names:
+  # v2_3 uses "tarsal_claw", not v1's "claw" -- all 6 verified as real XML
+  # bodies (unlike v1's `end_eff_names` comment, there is no v1-style
+  # "claw_T1_left" body here at all; the joint of the same name also exists
+  # but is not referenced from this list, which names BODIES).
+  - tarsal_claw_T1_left
+  - tarsal_claw_T1_right
+  - tarsal_claw_T2_left
+  - tarsal_claw_T2_right
+  - tarsal_claw_T3_left
+  - tarsal_claw_T3_right
+
+# All 54 verified as real XML bodies (v2_3 has a `trochanter` body per leg
+# that v1 does not, and splits the tarsus into tarsus1-4 + tarsal_claw where
+# v1 has tarsus/tarsus2/tarsus3/tarsus4/claw -- 9 bodies/leg x 6 legs).
+body_names:
+  - coxa_T1_left
+  - trochanter_T1_left
+  - femur_T1_left
+  - tibia_T1_left
+  - tarsus1_T1_left
+  - tarsus2_T1_left
+  - tarsus3_T1_left
+  - tarsus4_T1_left
+  - tarsal_claw_T1_left
+  - coxa_T1_right
+  - trochanter_T1_right
+  - femur_T1_right
+  - tibia_T1_right
+  - tarsus1_T1_right
+  - tarsus2_T1_right
+  - tarsus3_T1_right
+  - tarsus4_T1_right
+  - tarsal_claw_T1_right
+  - coxa_T2_left
+  - trochanter_T2_left
+  - femur_T2_left
+  - tibia_T2_left
+  - tarsus1_T2_left
+  - tarsus2_T2_left
+  - tarsus3_T2_left
+  - tarsus4_T2_left
+  - tarsal_claw_T2_left
+  - coxa_T2_right
+  - trochanter_T2_right
+  - femur_T2_right
+  - tibia_T2_right
+  - tarsus1_T2_right
+  - tarsus2_T2_right
+  - tarsus3_T2_right
+  - tarsus4_T2_right
+  - tarsal_claw_T2_right
+  - coxa_T3_left
+  - trochanter_T3_left
+  - femur_T3_left
+  - tibia_T3_left
+  - tarsus1_T3_left
+  - tarsus2_T3_left
+  - tarsus3_T3_left
+  - tarsus4_T3_left
+  - tarsal_claw_T3_left
+  - coxa_T3_right
+  - trochanter_T3_right
+  - femur_T3_right
+  - tibia_T3_right
+  - tarsus1_T3_right
+  - tarsus2_T3_right
+  - tarsus3_T3_right
+  - tarsus4_T3_right
+  - tarsal_claw_T3_right
+
+# All 56 verified as real XML joints. Head/antenna/mouthpart joints (14 -- the
+# same block v1 drops, plus `haustellum_abduct` etc.) are DROPPED here too:
+# neither model articulates the head. Unlike v1, T2/T3 legs here have only 1
+# coxa DOF (extension) -- no coxa_abduct/coxa_twist -- and there is no
+# femur_twist joint at all (a `trochanter_*` joint sits between coxa and
+# femur instead). `haltere_left`/`haltere_right` are new in v2.3 (no v1
+# equivalent) and are verified present.
+joint_names:
+  # Wing joints -- SAME SIX NAMES as v1, but at qposadr 21-26 here, not
+  # 7-12. Never index qpos by a v1-shaped slice against this model.
+  - wing_yaw_left
+  - wing_roll_left
+  - wing_pitch_left
+  - wing_yaw_right
+  - wing_roll_right
+  - wing_pitch_right
+
+  # Abdomen joints -- identical set and order to v1.
+  - abdomen_abduct
+  - abdomen
+  - abdomen_abduct_2
+  - abdomen_2
+  - abdomen_abduct_3
+  - abdomen_3
+  - abdomen_abduct_4
+  - abdomen_4
+  - abdomen_abduct_5
+  - abdomen_5
+  - abdomen_abduct_6
+  - abdomen_6
+  - abdomen_abduct_7
+  - abdomen_7
+
+  # T1 leg joints -- front legs keep all 3 coxa DOFs (abduct/twist/extend)
+  - coxa_abduct_T1_left
+  - coxa_twist_T1_left
+  - coxa_T1_left
+  - trochanter_T1_left
+  - femur_T1_left
+  - tibia_T1_left
+  - tarsus1_T1_left
+  - coxa_abduct_T1_right
+  - coxa_twist_T1_right
+  - coxa_T1_right
+  - trochanter_T1_right
+  - femur_T1_right
+  - tibia_T1_right
+  - tarsus1_T1_right
+
+  # T2 leg joints -- middle legs: coxa extension only (no abduct/twist)
+  - coxa_T2_left
+  - trochanter_T2_left
+  - femur_T2_left
+  - tibia_T2_left
+  - tarsus1_T2_left
+  - coxa_T2_right
+  - trochanter_T2_right
+  - femur_T2_right
+  - tibia_T2_right
+  - tarsus1_T2_right
+
+  # T3 leg joints -- hind legs: coxa extension only (no abduct/twist)
+  - coxa_T3_left
+  - trochanter_T3_left
+  - femur_T3_left
+  - tibia_T3_left
+  - tarsus1_T3_left
+  - coxa_T3_right
+  - trochanter_T3_right
+  - femur_T3_right
+  - tibia_T3_right
+  - tarsus1_T3_right
+
+  # Haltere joints -- new in v2.3, no v1 equivalent.
+  - haltere_left
+  - haltere_right
+
+wing_names:
+  # All 6 verified as real XML joints (same names as v1, different qposadr).
+  - wing_yaw_left
+  - wing_roll_left
+  - wing_pitch_left
+  - wing_yaw_right
+  - wing_roll_right
+  - wing_pitch_right
+
+# ===========================================================================
+# STAC model definition (ported from stac-mjx so the main configs are the
+# single source of truth). Defines the keypoint<->body mapping and IK solver
+# parameters Plan B's IK consumes. `model.KP_NAMES` (50) and
+# `KEYPOINT_MODEL_PAIRS` (50 targets) verified 100% present against the
+# compiled v2_3_ik model -- same 50 keypoint names as v1 (this fly's
+# tracked-keypoint set does not change between body models), retargeted at
+# v2_3's own body names (e.g. `T1L_TiTa: tarsus1_T1_left`, not v1's
+# `tarsus_T1_left`).
+# ===========================================================================
+model:
+  MJCF_PATH: ${anatomy.mjcf_path}
+  name: 'fruitfly_V2_3'
+
+  # OFF, AND IT STAYS OFF UNLESS SOMEONE TURNS IT ON DELIBERATELY -- same
+  # decision and rationale as v1.yaml (see that file's much longer comment
+  # for the full history, including the 2026-08-31 retraction of the "OFF is
+  # better" verdict and why it is still void). Not re-litigated per anatomy.
+  segment_calibration: false
+
+  N_FRAMES_PER_CLIP: 500
+
+  # Tolerance for the optimizations of the full model, limb, and root.
+  FTOL: 5.0e-03
+  ROOT_FTOL: 1.0e-05
+  LIMB_FTOL: 1.0e-06
+
+  # Number of alternating pose and offset optimization rounds.
+  N_ITERS: 6
+  N_ITER_Q: 500
+  N_ITER_M: 2000
+
+  KP_NAMES:
+    - Scutellum
+    - WingL_base
+    - WingR_base
+    - Antenna_Base
+    - EyeL
+    - EyeR
+    - WingL_V12
+    - WingL_V13
+    - WingR_V12
+    - WingR_V13
+    - Abd_A4
+    - Abd_tip
+    - T1L_ThxCx
+    - T1L_Tro
+    - T1L_FeTi
+    - T1L_TiTa
+    - T1L_TaT1
+    - T1L_TaT3
+    - T1L_TaTip
+    - T1R_ThxCx
+    - T1R_Tro
+    - T1R_FeTi
+    - T1R_TiTa
+    - T1R_TaT1
+    - T1R_TaT3
+    - T1R_TaTip
+    - T2L_Tro
+    - T2L_FeTi
+    - T2L_TiTa
+    - T2L_TaT1
+    - T2L_TaT3
+    - T2L_TaTip
+    - T2R_Tro
+    - T2R_FeTi
+    - T2R_TiTa
+    - T2R_TaT1
+    - T2R_TaT3
+    - T2R_TaTip
+    - T3L_Tro
+    - T3L_FeTi
+    - T3L_TiTa
+    - T3L_TaT1
+    - T3L_TaT3
+    - T3L_TaTip
+    - T3R_Tro
+    - T3R_FeTi
+    - T3R_TiTa
+    - T3R_TaT1
+    - T3R_TaT3
+    - T3R_TaTip
+
+  # The model sites used to register the keypoints.
+  KEYPOINT_MODEL_PAIRS:
+    Scutellum: thorax
+    WingL_base: thorax
+    WingR_base: thorax
+    Antenna_Base: head
+    EyeL: head
+    EyeR: head
+    WingL_V12: wing_left
+    WingL_V13: wing_left
+    WingR_V12: wing_right
+    WingR_V13: wing_right
+    Abd_A4: abdomen_4
+    Abd_tip: abdomen_7
+    T1L_ThxCx: coxa_T1_left
+    T1L_Tro: femur_T1_left
+    T1L_FeTi: tibia_T1_left
+    T1L_TiTa: tarsus1_T1_left
+    T1L_TaT1: tarsus2_T1_left
+    T1L_TaT3: tarsus4_T1_left
+    T1L_TaTip: tarsal_claw_T1_left
+    T1R_ThxCx: coxa_T1_right
+    T1R_Tro: femur_T1_right
+    T1R_FeTi: tibia_T1_right
+    T1R_TiTa: tarsus1_T1_right
+    T1R_TaT1: tarsus2_T1_right
+    T1R_TaT3: tarsus4_T1_right
+    T1R_TaTip: tarsal_claw_T1_right
+    T2L_Tro: femur_T2_left
+    T2L_FeTi: tibia_T2_left
+    T2L_TiTa: tarsus1_T2_left
+    T2L_TaT1: tarsus2_T2_left
+    T2L_TaT3: tarsus4_T2_left
+    T2L_TaTip: tarsal_claw_T2_left
+    T2R_Tro: femur_T2_right
+    T2R_FeTi: tibia_T2_right
+    T2R_TiTa: tarsus1_T2_right
+    T2R_TaT1: tarsus2_T2_right
+    T2R_TaT3: tarsus4_T2_right
+    T2R_TaTip: tarsal_claw_T2_right
+    T3L_Tro: femur_T3_left
+    T3L_FeTi: tibia_T3_left
+    T3L_TiTa: tarsus1_T3_left
+    T3L_TaT1: tarsus2_T3_left
+    T3L_TaT3: tarsus4_T3_left
+    T3L_TaTip: tarsal_claw_T3_left
+    T3R_Tro: femur_T3_right
+    T3R_FeTi: tibia_T3_right
+    T3R_TiTa: tarsus1_T3_right
+    T3R_TaT1: tarsus2_T3_right
+    T3R_TaT3: tarsus4_T3_right
+    T3R_TaTip: tarsal_claw_T3_right
+
+  # The initial offsets for each keypoint in meters. Re-placed onto the v2.3
+  # abdomen meshes (Abd_A4/Abd_tip differ from v1's/v2's values -- see the
+  # source config's own comment: both sat off the body under v2.1's numbers,
+  # inflating the trunk-marker Procrustes spread and over-scaling every
+  # keypoint).
+  KEYPOINT_INITIAL_OFFSETS:
+    Scutellum: -0.0475 0 0.0425
+    WingL_base: -0.00942 0.0453 0.0155
+    WingR_base: -0.00942 -0.0453 0.0155
+    Antenna_Base: 0 0.035 0.01
+    EyeL: -0.03 0.0025 0.025
+    EyeR: 0.03 0.0025 0.025
+    WingL_V12: -0.005 -0.215 0.005
+    WingL_V13: 0.02 -0.26 -0.02
+    WingR_V12: 0.005 0.215 -0.005
+    WingR_V13: -0.02 0.26 0.02
+    Abd_A4: 0 0.01323 0.03941
+    Abd_tip: -0.00272 0.01956 0.0028
+    T1L_ThxCx: 0.00126 0.01863 -0.00716
+    T1L_Tro: 0. 0. 0.
+    T1L_FeTi: 0. 0. 0.
+    T1L_TiTa: 0. 0. 0.
+    T1L_TaT1: 0. 0. 0.
+    T1L_TaT3: 0. 0. 0.
+    T1L_TaTip: 0 0.005 0
+    T1R_ThxCx: -0.00082 -0.01897 0.00627
+    T1R_Tro: 0. 0. 0.
+    T1R_FeTi: 0. 0. 0.
+    T1R_TiTa: 0. 0. 0.
+    T1R_TaT1: 0. 0. 0.
+    T1R_TaT3: 0. 0. 0.
+    T1R_TaTip: 0 -0.005 0
+    T2L_Tro: 0. 0. 0.
+    T2L_FeTi: 0. 0. 0.
+    T2L_TiTa: 0. 0. 0.
+    T2L_TaT1: 0. 0. 0.
+    T2L_TaT3: 0. 0. 0.
+    T2L_TaTip: 0 0.005 0
+    T2R_Tro: 0. 0. 0.
+    T2R_FeTi: 0. 0. 0.
+    T2R_TiTa: 0. 0. 0.
+    T2R_TaT1: 0. 0. 0.
+    T2R_TaT3: 0. 0. 0.
+    T2R_TaTip: 0 -0.005 0
+    T3L_Tro: 0. 0. 0.
+    T3L_FeTi: 0. 0. 0.
+    T3L_TiTa: 0. 0. 0.
+    T3L_TaT1: 0. 0. 0.
+    T3L_TaT3: 0. 0. 0.
+    T3L_TaTip: 0 0.005 0
+    T3R_Tro: 0. 0. 0.
+    T3R_FeTi: 0. 0. 0.
+    T3R_TiTa: 0. 0. 0.
+    T3R_TaT1: 0. 0. 0.
+    T3R_TaT3: 0. 0. 0.
+    T3R_TaTip: 0 -0.005 0
+
+  ROOT_OPTIMIZATION_KEYPOINT: "Scutellum"
+
+  TRUNK_OPTIMIZATION_KEYPOINTS: {}
+
+  INDIVIDUAL_PART_OPTIMIZATION:
+    # T1 coxa has 3 DOFs (abduct/twist/extend); T2/T3 coxa has 1 (extend
+    # only) -- v2_3 has no femur_twist, a trochanter joint sits in its place.
+    "T1L": ["coxa_abduct_T1_left", "coxa_twist_T1_left", "coxa_T1_left", "trochanter_T1_left", "femur_T1_left", "tibia_T1_left", "tarsus1_T1_left", "tarsus2_T1_left", "tarsus3_T1_left", "tarsus4_T1_left", "tarsal_claw_T1_left"]
+    "T1R": ["coxa_abduct_T1_right", "coxa_twist_T1_right", "coxa_T1_right", "trochanter_T1_right", "femur_T1_right", "tibia_T1_right", "tarsus1_T1_right", "tarsus2_T1_right", "tarsus3_T1_right", "tarsus4_T1_right", "tarsal_claw_T1_right"]
+    "T2L": ["coxa_T2_left", "trochanter_T2_left", "femur_T2_left", "tibia_T2_left", "tarsus1_T2_left", "tarsus2_T2_left", "tarsus3_T2_left", "tarsus4_T2_left", "tarsal_claw_T2_left"]
+    "T2R": ["coxa_T2_right", "trochanter_T2_right", "femur_T2_right", "tibia_T2_right", "tarsus1_T2_right", "tarsus2_T2_right", "tarsus3_T2_right", "tarsus4_T2_right", "tarsal_claw_T2_right"]
+    "T3L": ["coxa_T3_left", "trochanter_T3_left", "femur_T3_left", "tibia_T3_left", "tarsus1_T3_left", "tarsus2_T3_left", "tarsus3_T3_left", "tarsus4_T3_left", "tarsal_claw_T3_left"]
+    "T3R": ["coxa_T3_right", "trochanter_T3_right", "femur_T3_right", "tibia_T3_right", "tarsus1_T3_right", "tarsus2_T3_right", "tarsus3_T3_right", "tarsus4_T3_right", "tarsal_claw_T3_right"]
+
+  # Color to use for each keypoint when visualizing the results.
+  KEYPOINT_COLOR_PAIRS:
+    Scutellum: 0.22 0.46 0.67 1
+    WingL_base: 0.22 0.46 0.67 1
+    WingR_base: 0.22 0.46 0.67 1
+    Antenna_Base: 0.22 0.46 0.67 1
+    EyeL: 0.22 0.46 0.67 1
+    EyeR: 0.22 0.46 0.67 1
+    WingL_V12: 0.22 0.46 0.67 1
+    WingL_V13: 0.22 0.46 0.67 1
+    WingR_V12: 0.22 0.46 0.67 1
+    WingR_V13: 0.22 0.46 0.67 1
+    Abd_A4: 0.22 0.46 0.67 1
+    Abd_tip: 0.22 0.46 0.67 1
+    T1L_ThxCx: 0.22 0.46 0.67 1
+    T1L_Tro: 0.22 0.46 0.67 1
+    T1L_FeTi: 0.22 0.46 0.67 1
+    T1L_TiTa: 0.22 0.46 0.67 1
+    T1L_TaT1: 0.22 0.46 0.67 1
+    T1L_TaT3: 0.22 0.46 0.67 1
+    T1L_TaTip: 0.22 0.46 0.67 1
+    T1R_ThxCx: 0.92 0.5 0.18 1
+    T1R_Tro: 0.92 0.5 0.18 1
+    T1R_FeTi: 0.92 0.5 0.18 1
+    T1R_TiTa: 0.92 0.5 0.18 1
+    T1R_TaT1: 0.92 0.5 0.18 1
+    T1R_TaT3: 0.92 0.5 0.18 1
+    T1R_TaTip: 0.32 0.62 0.24 1
+    T2L_Tro: 0.32 0.62 0.24 1
+    T2L_FeTi: 0.32 0.62 0.24 1
+    T2L_TiTa: 0.32 0.62 0.24 1
+    T2L_TaT1: 0.32 0.62 0.24 1
+    T2L_TaT3: 0.32 0.62 0.24 1
+    T2L_TaTip: 0.76 0.21 0.17 1
+    T2R_Tro: 0.76 0.21 0.17 1
+    T2R_FeTi: 0.76 0.21 0.17 1
+    T2R_TiTa: 0.76 0.21 0.17 1
+    T2R_TaT1: 0.76 0.21 0.17 1
+    T2R_TaT3: 0.76 0.21 0.17 1
+    T2R_TaTip: 0.76 0.21 0.17 1
+    T3L_Tro: 0.55 0.41 0.72 1
+    T3L_FeTi: 0.55 0.41 0.72 1
+    T3L_TiTa: 0.55 0.41 0.72 1
+    T3L_TaT1: 0.55 0.41 0.72 1
+    T3L_TaT3: 0.55 0.41 0.72 1
+    T3L_TaTip: 0.55 0.41 0.72 1
+    T3R_Tro: 0.51 0.34 0.30 1
+    T3R_FeTi: 0.51 0.34 0.30 1
+    T3R_TiTa: 0.51 0.34 0.30 1
+    T3R_TaT1: 0.51 0.34 0.30 1
+    T3R_TaT3: 0.51 0.34 0.30 1
+    T3R_TaTip: 0.51 0.34 0.30 1
+
+  # What is the size of the animal you'd like to register, relative to the
+  # model? `build_marker_model` raises on anything other than 1 (the
+  # `stac_mjx.rescale.dm_scale_spec` path is not ported) -- identity only.
+  SCALE_FACTOR: 1
+
+  # Multiplier to put the mocap data into the same scale as the data.
+  MOCAP_SCALE_FACTOR: 1
+
+  SITES_TO_REGULARIZE:
+    - Scutellum
+    - Abd_A4
+    - Abd_tip
+    - WingL_base
+    - WingR_base
+    - T1L_ThxCx
+    - T1R_ThxCx
+    - T1L_TaTip
+    - T2L_TaTip
+    - T3L_TaTip
+    - T1R_TaTip
+    - T2R_TaTip
+    - T3R_TaTip
+
+  RENDER_FPS: 50
+
+  N_SAMPLE_FRAMES: 100
+
+  M_REG_COEF: 0
+
+  # Per-joint L2 regularization toward rest pose (q=0) applied during pose
+  # optimization. Empty = no regularization -- no v2_3-specific measurement
+  # has been done to justify a nonzero value (see v1.yaml's own comment for
+  # why one was tried and reverted there).
+  JOINT_REG_WEIGHTS: {}
+
+  # Fixed step size for the ProjectedGradient q optimizer (see v1.yaml for
+  # the rationale -- identical here).
+  STEPSIZE_Q: 0.0
+
+  # --- Jaxls batch Levenberg-Marquardt IK solver ---
+  USE_JAXLS: True
+  JAXLS_LAMBDA_INITIAL: 1.0
+  JAXLS_GRADIENT_TOLERANCE: 1.0e-8
+  JAXLS_PARAMETER_TOLERANCE: 1.0e-10
+  JAXLS_COST_TOLERANCE: 1.0e-10
+  JAXLS_SMOOTH_WEIGHT: 0.01
+  JAXLS_LINEAR_SOLVER: "auto"
+  JAXLS_USE_SE3_ROOT: true
+  JAXLS_CHUNK_SIZE: 0
+  JAXLS_ORIENTATION_KEYPOINTS:
+    rear: Scutellum
+    left: WingL_base
+    right: WingR_base
+    front: Antenna_Base
+
+  KEYPOINT_WEIGHTS: {}

@@ -1,0 +1,17 @@
+# One GPU-node job in the SLURM chain; `tracking/pipeline/slurm/` renders
+# these into sbatch scripts. This file carries only the resource request.
+#
+# No concurrency cap -- see ckpt_all.yaml.
+partition: gpu-l40s
+# Valid on both partitions (checked with `sbatch --test-only`, 2026-09-14).
+account: portia
+gres: "gpu:l40s:1"
+cpus_per_task: 8
+mem: "128G"
+time: "12:00:00"
+
+# Before importing jax: a stale cuda module or a leftover JAX_PLATFORMS
+# silently changes which backend jax picks.
+setup_commands:
+  - "module load cuda"
+  - "unset JAX_PLATFORMS"

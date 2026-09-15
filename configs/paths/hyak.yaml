@@ -1,0 +1,38 @@
+# Real Hyak paths for the tracking pipeline (configs/pipeline.yaml's default
+# `paths` group). Same shape as paths/template.yaml, filled in for this
+# checkout rather than left CHANGEME; copy it (per paths/template.yaml's own
+# instructions) if you need a different machine.
+#
+#   python -m tracking.run paths=hyak ...   # (the pipeline.yaml default; rarely needs saying)
+
+user: ${oc.env:USER}
+
+# This checkout's repo root, resolved independent of cwd/Hydra
+# (utils.path_utils.repo_root) -- NOT used to locate data, only the
+# in-repo body model (configs/anatomy/v1.yaml's `root: ${repo_root:}/model`).
+project_dir: ${repo_root:}
+
+# Raw multi-camera recordings + calibration (Johnson lab courtship /
+# free-running data). configs/recording/*.yaml's session_dir/calib_dir
+# interpolate this.
+data_dir: "/gscratch/portia/eabe/data/Johnson_lab"
+
+# The processed-data root. Runs land at
+#   <base_dir>/<recording.assay>/<recording.name>/<run.name>
+# e.g. processed/courtship/Session0/2025_10_20_13_20_04/pose_v2 -- the lab's
+# existing on-disk convention, which `processed/` already partitions by assay
+# (courtship, free_running, benchmark).
+#
+# This was `processed/ik_port` until 2026-09-14, a flat namespace chosen so a
+# run could never collide with the reference runs that sit beside it. That
+# isolation is now provided by `run.name` instead, and the collision it was
+# guarding against is guarded EXPLICITLY: `run.root` refuses to write into a
+# directory it did not create (see `run.allow_foreign_root` in pipeline.yaml).
+# A separate namespace hid our outputs from every tool that knows the
+# convention, which is the higher cost.
+base_dir: "/gscratch/portia/eabe/data/Johnson_lab/processed"
+
+# External checkpoints/model assets (scripts/fetch_assets.py verifies these
+# against configs/mvq/*.yaml + configs/centerdetect/*.yaml's own paths --
+# this is just the shared root they happen to live under on this machine).
+ckpt_dir: "/gscratch/portia/eabe/data/Johnson_lab"

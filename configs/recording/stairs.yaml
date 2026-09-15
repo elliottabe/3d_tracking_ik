@@ -1,0 +1,47 @@
+# The single-fly assay (spec section 2.1: "free-running / Stairs (1 fly)").
+# Real single-fly raw recording verified on disk 2026-09-13:
+# free_running/Session11/2026_03_03_13_25_13 (flat-ground free-running --
+# used end to end for the single-fly assay in Plan B's Task 19). No raw
+# video for a literal obstacle-course "Stairs" recording was found under
+# this data root at that date (Video_recordings/Stairs/ holds only an
+# OLDER pipeline's postprocessed output, `Predictions_3D_20260828-115905`
+# and its combined h5, no `Cam*.mp4`) -- if/when that raw recording is
+# located, point this file at it instead; until then this is the
+# single-fly recording this config group name stands in for.
+#
+#   python -m tracking.run recording=stairs dry_run=true
+
+name: "Session11/2026_03_03_13_25_13"
+
+# Which assay this recording belongs to: `courtship` or `free_running`.
+#
+# This is a PATH COMPONENT, not a label. `run.root` is
+# `<data_dir>/processed/<assay>/<recording.name>/<run.name>`, which is the
+# lab's existing on-disk convention -- the reference runs this port was built
+# against live at `processed/courtship/Session0/2025_10_20_13_20_04/
+# pose_maskfree_v2`. Getting it wrong files a whole recording's outputs under
+# the wrong assay, where nothing downstream looks for them.
+assay: free_running
+
+session_dir: "${paths.data_dir}/Video_recordings/free_running/Session11/2026_03_03_13_25_13"
+calib_dir: "${recording.session_dir}/calibration"
+
+# sorted(glob("Cam*.yaml")) order, verified against calib_dir on disk
+# 2026-09-13 -- same 7-camera rig as the courtship sessions.
+cameras:
+  - Cam2012630
+  - Cam2012631
+  - Cam2012853
+  - Cam2012855
+  - Cam2012857
+  - Cam2012861
+  - Cam2012862
+
+# Single fly: passing the courtship default (2) here writes a second fly
+# directory full of NaN that every downstream per-fly stage then scales,
+# fits offsets for, and solves for nothing (bout_stages/recording_stages
+# module docstrings name this exact silent-mistake class).
+num_animals: 1
+fps: 800.0
+
+bouts_csv: "${recording.session_dir}/free_running_bout_summary.csv"

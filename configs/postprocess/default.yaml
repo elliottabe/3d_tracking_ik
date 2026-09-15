@@ -1,0 +1,10 @@
+# `postprocess_bout_fly`'s own defaults, made explicit.
+source: kp3d_filt
+conf_thresh: 0.3
+
+# `fit_run_floor`'s knobs (spec section 5.3: the arena floor, pooled ONCE
+# per recording over every bout-fly's `kp3d_filt.npz`, consumed here by
+# postprocess and nowhere else -- see `recording_stages.fit_run_floor`).
+floor:
+  n_fit: 2000
+  up_hint: null

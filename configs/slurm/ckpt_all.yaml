@@ -1,0 +1,32 @@
+# Checkpoint queue: use when the owned GPU node is busy. Preemptible, hence
+# `requeue: true` -- each stage's own resume check makes a requeue cheap.
+#
+# No concurrency cap. The 4-way limit this file used to carry came from 8 JAX
+# pipelines sharing ONE cgroup on an interactive node; SLURM gives each array
+# task its own allocation, so raise `mem` instead of serialising the campaign.
+partition: ckpt-all
+
+# Excludes cards too small for this model (rtx6k 24G, 2080ti 11G, p100 16G)
+# and the CPU-only nodes. An OR constraint is a SET, not a preference.
+constraint: 'h200|a100|l40s|l40|a40'
+
+# Valid on both partitions (checked with `sbatch --test-only`, 2026-09-14).
+account: portia
+
+# Generic, not `gpu:l40s:1` -- pinning the type discards the a40/a100/h200
+# pools the constraint just made eligible.
+gres: "gpu:1"
+
+# Nodes slurm reports healthy but where the CUDA plugin finds no usable device.
+# g3121 (2026-09-15): 3 tasks failed there with "no supported devices found for
+# platform CUDA" while 66 tasks succeeded on a100/a40/l40/l40s elsewhere,
+# including other l40s. Drop an entry once the node is fixed.
+exclude: g3121
+cpus_per_task: 8
+mem: "128G"
+# `fine` is one job over every bout of a recording; 8h left no headroom.
+time: "12:00:00"
+requeue: true
+setup_commands:
+  - "module load cuda"
+  - "unset JAX_PLATFORMS"

@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tracking"
+description = "Mask-free multi-camera fly tracking to articulated IK fits."
+authors = [{ name = "Elliott Abe", email = "eabe@uw.edu" }]
+readme = "README.md"
+requires-python = ">=3.13"
+dynamic = ["version"]
+dependencies = [
+    "hydra-core", "omegaconf", "numpy", "pandas", "h5py", "tqdm",
+    "opencv-python-headless", "imageio", "imageio-ffmpeg", "scipy",
+    # matplotlib: the kp-video's 3D world panel. It was previously an
+    # UNDECLARED dependency -- installed, imported by four scripts/viz tools,
+    # and never listed -- so a clean install would have failed on them.
+    "matplotlib",
+    "jax[cuda12]", "flax", "optax", "orbax-checkpoint",
+    "mujoco", "mujoco-mjx",
+    "huggingface_hub", "safetensors",
+    # `pip install jaxls` resolves to an UNRELATED PyPI package of the same
+    # name (2024.0.1), which imports `jax.core.JaxprEqn` and dies on any
+    # modern jax. The IK solver needs brentyi/jaxls, which publishes no
+    # wheel, so it is pinned here by commit -- the same commit the source
+    # repo's environment was built from.
+    "jaxls @ git+https://github.com/brentyi/jaxls.git@5f766d3b09364a96d83497de2325a835d0e23dc4",
+    "jaxlie", "jax_dataclasses", "termcolor",
+]
+
+[project.optional-dependencies]
+dev = ["ruff"]
+
+[tool.hatch.version]
+path = "src/tracking/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tracking"]
+
+[tool.ruff]
+line-length = 100
+src = ["src"]
+# Markdown is excluded from FORMATTING only (ruff >=0.16 formats python blocks
+# inside .md); the code that matters lives in real files, which ruff checks.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+# E/W: pycodestyle, F: pyflakes, I: isort, UP: pyupgrade, B: bugbear
+select = ["E", "W", "F", "I", "UP", "B"]

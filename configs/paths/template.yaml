@@ -1,0 +1,32 @@
+# Template paths configuration for a new machine / cluster.
+#
+# Copy this file to configs/paths/<your-machine>.yaml (e.g. laptop.yaml,
+# hyak.yaml), edit the CHANGEME entries, then select it on the CLI:
+#
+#   python -m your_package.main paths=<your-machine>
+#
+# Tips:
+#   - `user` auto-resolves from $USER; override with `paths.user=someone` if needed.
+#   - Most subfields derive from `project_dir` / `base_dir`, so usually you only
+#     edit those two.
+#   - Use ABSOLUTE paths. Relative paths break when Hydra changes the working
+#     directory at runtime. (The portable default.yaml uses ${hydra:runtime.cwd}
+#     to stay absolute; here you pin real locations instead.)
+
+user: ${oc.env:USER}
+package_name: your_package
+
+# Absolute path to where you cloned this repository.
+project_dir: "/CHANGEME/path/to/your_package"
+
+# Where run outputs (logs, checkpoints, figures) go. Point this at large/scratch
+# storage on a cluster, e.g. "/scratch/${paths.user}/your_package/${version}".
+base_dir: "/CHANGEME/scratch/${paths.user}/${paths.package_name}/${version}"
+save_dir: ${multirun_save_dir:${paths.base_dir},${run_id}}
+log_dir:  "${paths.save_dir}/logs"
+ckpt_dir: "${paths.save_dir}/ckpt"
+fig_dir:  "${paths.save_dir}/figures"
+
+# Where input datasets live. Often in-repo (<project_dir>/data); on a cluster
+# you may point this at a shared data location instead.
+data_dir: "${paths.project_dir}/data"

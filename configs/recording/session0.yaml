@@ -1,0 +1,59 @@
+# Courtship Session0, the recording this port's parity gate (spec section 11)
+# is measured against: bout 28, both flies, checked byte-for-byte where
+# possible against the old repo's reference run at
+# ${paths.data_dir}/processed/courtship/Session0/2025_10_20_13_20_04/pose_maskfree_v2.
+#
+#   python -m tracking.run recording=session0 mvq=v2 run.name=pose_v2
+
+# `name` doubles as the `session_tag` a hand-supplied bout_summary CSV's
+# `fly_id` column is filtered against (io.bouts.read_bout_summary) -- it
+# MUST be exactly "<Session>/<timestamp>", matching this recording's
+# `fly_id` prefix ("Session0/2025_10_20_13_20_04_fly0", ...), not a
+# free-form label.
+name: "Session0/2025_10_20_13_20_04"
+
+# Which assay this recording belongs to: `courtship` or `free_running`.
+#
+# This is a PATH COMPONENT, not a label. `run.root` is
+# `<data_dir>/processed/<assay>/<recording.name>/<run.name>`, which is the
+# lab's existing on-disk convention -- the reference runs this port was built
+# against live at `processed/courtship/Session0/2025_10_20_13_20_04/
+# pose_maskfree_v2`. Getting it wrong files a whole recording's outputs under
+# the wrong assay, where nothing downstream looks for them.
+assay: courtship
+
+session_dir: "${paths.data_dir}/Video_recordings/courtship/Session0/2025_10_20_13_20_04"
+calib_dir: "${recording.session_dir}/calibration"
+
+# sorted(glob("Cam*.yaml")) order, verified against calib_dir on disk
+# 2026-09-13 -- do not hand-reorder this list independently of it.
+cameras:
+  - Cam2012630
+  - Cam2012631
+  - Cam2012853
+  - Cam2012855
+  - Cam2012857
+  - Cam2012861
+  - Cam2012862
+
+num_animals: 2
+fps: 800.0
+
+# Hand-supplied bout summary (the `bouts` route, spec section 5's "(alt)" row).
+#
+# `courtship_bout_summary.csv` is the RECORDING-level file and lists all 30
+# bouts of this recording (verified 2026-09-14 through `read_bout_summary`:
+# 30 BoutSpecs, idx 1..30, 28447 frames per fly). Its `fly_id` column is the
+# recording (`Session0/2025_10_20_13_20_04`, no `_fly<n>` suffix) with a
+# `source_fly` column beside it, which is the per-recording shape
+# `read_bout_summary` is written for.
+#
+# The per-fly files (`courtship_bouts_fly{0,1}_summary.csv`) were used here
+# until 2026-09-14. They are identical row-for-row apart from the fly suffix
+# and also list 30 bouts, so this is not a change of content -- but the
+# recording-level file is the honest one for a per-recording setting.
+#
+# `courtship_bouts_unified_summary.csv` also exists and is STILL a broken
+# symlink (re-checked 2026-09-14: it points at a missing
+# `Predictions_3D_34662304/` dir). Do not switch to it.
+bouts_csv: "${recording.session_dir}/courtship_bout_summary.csv"

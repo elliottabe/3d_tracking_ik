@@ -1,0 +1,65 @@
+# `preprocess_bout_fly`'s filter cfg + `fit_fly_constants`'s offsets-sample
+# knobs. The `filter:` block is copied VERBATIM from
+# `tracking.preprocess.filter._DEFAULT_FILTER_CFG` ("the pipeline's real
+# settings, from configs/pipeline.yaml and confirmed against the reference
+# run's own resolved Hydra config" -- that module's own docstring says this
+# file is its source of truth, so keep the two in sync by hand if either
+# changes). `savgol.window_length` must keep that exact key name -- the
+# stage reads `window_length`; a config that writes `window` is silently
+# ignored and falls back to 11.
+filter:
+  enabled: true
+  preserve_raw_patterns: ["Wing"]
+  confidence:
+    enabled: true
+    threshold: 0.3
+    exclude_keypoint_patterns: ["Wing"]
+  bone_length:
+    enabled: true
+    threshold_std: 5.0
+    exclude_keypoint_patterns: ["Wing"]
+  isolated_spike:
+    enabled: true
+    threshold_factor: 10.0
+    max_iterations: 1
+  interpolation:
+    enabled: true
+    use_spline: true
+    max_edge_extrap_frames: 5
+    edge_fit_window: 5
+  savgol:
+    enabled: true
+    window_length: 7
+    polyorder: 2
+  # Present and false in the real config; the keys stay so that turning one
+  # on is a config change rather than a code change.
+  centroid_jump: { enabled: false }
+  identity_relink: { enabled: false }
+  medfilt_despike: { enabled: false }
+  medfilt: { enabled: false }
+  confidence_smooth: { enabled: false }
+
+# `fit_fly_constants`'s offsets-sample knobs, made an explicit config rather
+# than a Python default only reachable by editing source.
+#
+# `n_frames: 500` is TRACED TO SOURCE, not chosen. Three independent places
+# say 500 and none says 300:
+#   - `configs/anatomy/v1.yaml:258`  `N_FRAMES_PER_CLIP: 500`
+#   - the reference run's own recorded Hydra config, inside
+#     `<reference>/offsets_fly0.h5`'s `config` dataset: `n_frames_per_clip: 500`
+#   - the artifacts themselves: the reference's and `2026-09-13-freeze-wings`'
+#     `offsets_fly*.h5` both hold `kp_data` of shape (500, 150)
+# It was 300 until 2026-09-13, mirroring a `bout_stages` constant whose comment
+# called it one of "the module's own sane defaults" -- i.e. a number that moves
+# the offsets fit, the IK and every downstream metric, chosen for being sane
+# rather than taken from anywhere. Measured cost of the 300: bout 28 fitted
+# 2.9577/1.6357 px against the 2.8029/1.4683 the reference-sized sample gives.
+#
+# `min_conf` and `mad_k` are NOT yet traced. The reference config records
+# `offsets_min_conf: 0.7` (we use 0.8) and `robust: none` with no offsets
+# `mad_k` at all. Both are open, and are deliberately left alone so
+# `n_frames` could be changed on its own.
+offsets:
+  n_frames: 500
+  min_conf: 0.8
+  mad_k: 3.0

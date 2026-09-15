@@ -1,0 +1,30 @@
+# `viz.sidebyside`'s knobs (Task 16). Nested under `sidebyside:` rather than
+# flat, unlike `configs/postprocess/default.yaml` -- `kpvideo` has no
+# cfg-driven knobs of its own yet, but when it gets some this group holds
+# both without either stage's keys colliding.
+#
+# This file is what makes a side-by-side render config-driven instead of the
+# four hand-typed CLI paths + a hand-typed `--bout-start` the original
+# `scripts/viz/sidebyside_rigcam.py` took -- see
+# `src/tracking/viz/sidebyside.py`'s module docstring for the render itself.
+sidebyside:
+  # Bout-relative frame indices to render (the `qpos`/`kp3d` axis, NOT an
+  # absolute video frame number). `null` samples `n_preview_frames` indices
+  # evenly across the bout (`render_sidebyside._sample_frames`), so the same
+  # knob gives a representative preview whether the bout is 40 or 4000
+  # frames long -- nobody picks a frame number by hand. Set to an explicit
+  # list (e.g. `[0, 250, 500]`) to render only those.
+  frames: null
+  n_preview_frames: 8
+  # Camera names to render, in `rig.cameras` order; `null` = every camera in
+  # the rig.
+  cameras: null
+  # Marker sphere radius, MODEL units (a fly spans ~0.25) -- the original
+  # script's default, unchanged by the extraction.
+  geom_size: 0.004
+  # Crop half-width/height, pixels, around the fly in the REAL camera frame.
+  pad: 170
+  # Low on purpose: `sidebyside.mp4` is a handful of SAMPLED frames spread
+  # across the whole bout (not consecutive playback, unlike `kpvideo`), so a
+  # kpvideo-like 30 fps would flash past before any one frame is readable.
+  fps: 4.0

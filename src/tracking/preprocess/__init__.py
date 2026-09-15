@@ -1,0 +1,101 @@
+"""Cleaning that runs between triangulation and the IK solve.
+
+One meaning of "public": this package re-exports exactly the union of the four
+modules' own `__all__`, so `tracking.preprocess.X` exists for every X a module
+calls public. It used to drop four of `scale.__all__`'s constants, which made
+"public" mean one thing at the module level and another here.
+"""
+
+from tracking.preprocess.filter import (
+    DEFAULT_FILTER_CFG,
+    FilterReport,
+    default_filter_cfg,
+    filter_kp3d,
+    skeleton_edges,
+)
+from tracking.preprocess.gaps import (
+    MAX_GAP,
+    MIN_SEGMENT,
+    contiguous_segments,
+    fill_short_gaps,
+    finite_frame_mask,
+    marker_validity_mask,
+    required_keypoints,
+)
+from tracking.preprocess.offsets import (
+    SHARED_OFFSETS_NAME,
+    OffsetsSample,
+    aligned_per_frame_scales,
+    load_fly_bouts,
+    offsets_fit_cfg,
+    per_fly_offsets_name,
+    resolve_offsets_path,
+    select_offsets_sample,
+)
+from tracking.preprocess.scale import (
+    BODY_LENGTH_MM_MAX,
+    BODY_LENGTH_MM_MIN,
+    BODY_LENGTH_REF_PAIR,
+    DEFAULT_TRUNK_KEYPOINTS,
+    LEG_JOINT_CHAIN,
+    LEG_NAMES,
+    THORAX_PAIRS,
+    WITHIN_BONE_CV_WARN_THRESH,
+    WORLD_UNITS_TO_MM,
+    assert_plausible_body_scale,
+    bout_index,
+    bout_kp3d_paths,
+    estimate_fly_scale,
+    implied_body_length_mm,
+    per_bout_segment_scale,
+    per_frame_scales,
+    read_bout_kp3d,
+    rigid_segment_pairs,
+    robust_scale,
+    segment_scale_diagnostics,
+    warn_if_estimator_ignored,
+)
+
+__all__ = [
+    "BODY_LENGTH_MM_MAX",
+    "BODY_LENGTH_MM_MIN",
+    "BODY_LENGTH_REF_PAIR",
+    "DEFAULT_FILTER_CFG",
+    "DEFAULT_TRUNK_KEYPOINTS",
+    "LEG_JOINT_CHAIN",
+    "LEG_NAMES",
+    "MAX_GAP",
+    "MIN_SEGMENT",
+    "SHARED_OFFSETS_NAME",
+    "THORAX_PAIRS",
+    "WITHIN_BONE_CV_WARN_THRESH",
+    "WORLD_UNITS_TO_MM",
+    "FilterReport",
+    "OffsetsSample",
+    "aligned_per_frame_scales",
+    "assert_plausible_body_scale",
+    "bout_index",
+    "bout_kp3d_paths",
+    "contiguous_segments",
+    "default_filter_cfg",
+    "estimate_fly_scale",
+    "fill_short_gaps",
+    "filter_kp3d",
+    "finite_frame_mask",
+    "implied_body_length_mm",
+    "load_fly_bouts",
+    "marker_validity_mask",
+    "offsets_fit_cfg",
+    "per_bout_segment_scale",
+    "per_fly_offsets_name",
+    "per_frame_scales",
+    "read_bout_kp3d",
+    "required_keypoints",
+    "resolve_offsets_path",
+    "rigid_segment_pairs",
+    "robust_scale",
+    "segment_scale_diagnostics",
+    "select_offsets_sample",
+    "skeleton_edges",
+    "warn_if_estimator_ignored",
+]
