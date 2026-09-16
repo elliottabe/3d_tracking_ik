@@ -5,11 +5,30 @@ sessions is explicit (`combine_many`). Each session carries ONE DLT
 calibration; pooling h5s with disjoint calibration frames averages them into a
 world centre that belongs to neither.
 
-THE CONTRACT. `Fruitfly_v2_3_walk_1000hz_interp_padded.h5` defines seven
-entries: `clip_lengths`, `kp_data`, `qpos`, `qvel`, `xpos`, `xquat` and the
-`qpos_names` GROUP. We write those with its names, dtypes and axis order, plus
-`site_xpos`, `xpos_egocentric` and an `info` group -- additive entries no
-contract reader is disturbed by.
+LAYOUT. Two, and the default is NOT the padded one.
+
+`padded=False` (default) writes ONE GROUP PER CLIP -- `bout_000/`,
+`bout_001/`, ... each holding that clip's arrays at its OWN length. This is
+what `ik_output_combined_mvq_v2.h5` does and what downstream analysis reads.
+
+`padded=True` writes the `(N, Tmax, ...)` zero-padded stack that
+`Fruitfly_v2_3_walk_1000hz_interp_padded.h5` defines -- seven entries
+(`clip_lengths`, `kp_data`, `qpos`, `qvel`, `xpos`, `xquat`, the `qpos_names`
+GROUP) with its names, dtypes and axis order. That file is the RL dataset:
+its name says `interp_padded`, and padding exists there because an
+imitation-learning loader wants a rectangular tensor. Pair it with
+`postprocess.resample --target-hz` for the interpolation half.
+
+**Padding was this module's default until 2026-09-15, and that was a
+mistake.** Adopting the RL export's shape as the general analysis contract
+made 62.3% of every per-recording file zeros, and 79.5% of a pooled
+Session0+Session1 file -- 4.5 GB of 5.64 GB -- because pooling raises Tmax to
+the longest clip anywhere (3694) while the median clip is 655. Worse than the
+size: a consumer who forgets `clip_lengths` averages zeros into every
+statistic, silently, which is this repo's most expensive bug class.
+
+Both layouts carry `clip_lengths`, the `qpos_names` group, `site_xpos`,
+`xpos_egocentric` and the `info` group, and stamp `attrs["layout"]`.
 
 The contract file is anatomy v2_3 (nq=101); this pipeline is v1 (nq=93, wings
 at qpos 7-12, indices v2_3_ik maps onto LEGS). The comparison is STRUCTURAL.
@@ -356,7 +375,9 @@ def _write_info_group(info, entries: list[BoutEntry], excluded: list[dict]) -> N
     info.attrs["n_excluded"] = len(excluded)
 
 
-def _combine(entries, *, anatomy, source_hz, git_sha, out_path, source_file, excluded):
+def _combine(
+    entries, *, anatomy, source_hz, git_sha, out_path, source_file, excluded, padded=False
+):
     if not entries:
         raise ValueError(
             f"no usable bout-fly outputs to combine (excluded {len(excluded)}); "
@@ -394,15 +415,30 @@ def _combine(entries, *, anatomy, source_hz, git_sha, out_path, source_file, exc
     tmp = f"{out_path}.tmp"
     with h5py.File(tmp, "w") as f:
         f.create_dataset("clip_lengths", data=np.asarray(lengths, np.int32))
-        f.create_dataset("kp_data", data=_pad_stack(kp_flat, tmax))
-        for k, v in per.items():
-            f.create_dataset(k, data=_pad_stack(v, tmax))
+        if padded:
+            f.create_dataset("kp_data", data=_pad_stack(kp_flat, tmax))
+            for k, v in per.items():
+                f.create_dataset(k, data=_pad_stack(v, tmax))
+        else:
+            # One group per clip, each at its OWN length -- the layout
+            # `ik_output_combined_mvq_v2.h5` uses and downstream analysis
+            # already reads. Group index is the clip's position in every
+            # `info/` array, so `info/sex[i]` describes `bout_%03d % i`.
+            for i, (kp, key) in enumerate(zip(kp_flat, entries, strict=True)):
+                g = f.create_group(f"bout_{i:03d}")
+                g.create_dataset("kp_data", data=kp)
+                for k, v in per.items():
+                    g.create_dataset(k, data=v[i])
+                g.attrs["bout_key"] = str(key.key)
+                g.attrs["fly"] = int(key.fly)
+                g.attrs["n_frames"] = int(len(kp))
         grp = f.create_group("qpos_names")
         for i, name in enumerate(anatomy.names_qpos):
             grp.create_dataset(str(i), data=np.bytes_(str(name)))
         _write_info_group(f.create_group("info"), entries, excluded)
         f.attrs["anatomy"] = str(anatomy.name)
         f.attrs["clip_lengths_are_true"] = True
+        f.attrs["layout"] = "padded" if padded else "per_bout_groups"
         f.attrs["git_sha"] = str(git_sha)
         f.attrs["source_file"] = str(source_file)
         f.attrs["source_hz"] = float(source_hz)
@@ -410,14 +446,15 @@ def _combine(entries, *, anatomy, source_hz, git_sha, out_path, source_file, exc
     os.replace(tmp, str(out_path))
     return {
         "n_clips": len(entries),
-        "tmax": tmax,
+        "tmax": tmax if padded else None,
+        "layout": "padded" if padded else "per_bout_groups",
         "excluded": excluded,
         "out_path": str(out_path),
     }
 
 
 def combine_session(
-    run_root, *, anatomy, source_hz, git_sha, out_path, fly_id=None, bucket=None
+    run_root, *, anatomy, source_hz, git_sha, out_path, fly_id=None, bucket=None, padded=False
 ) -> dict[str, Any]:
     """One session -> one combined h5. The default unit.
 
@@ -436,10 +473,13 @@ def combine_session(
         out_path=out_path,
         source_file=str(run_root),
         excluded=excluded,
+        padded=padded,
     )
 
 
-def combine_many(run_roots, *, anatomy, source_hz, git_sha, out_path) -> dict[str, Any]:
+def combine_many(
+    run_roots, *, anatomy, source_hz, git_sha, out_path, padded=False
+) -> dict[str, Any]:
     """Several sessions pooled into one file. EXPLICIT, never the default.
 
     Pooling mixes DLT calibration frames; `info/fly_ids` and `info/buckets`
@@ -459,4 +499,5 @@ def combine_many(run_roots, *, anatomy, source_hz, git_sha, out_path) -> dict[st
         out_path=out_path,
         source_file=json.dumps([str(r) for r in run_roots]),
         excluded=excluded,
+        padded=padded,
     )
