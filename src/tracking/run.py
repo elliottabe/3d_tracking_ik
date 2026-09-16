@@ -33,19 +33,33 @@ fits, `ik`, `postprocess`, `sidebyside`, `collect` to `pipeline.bout_stages` /
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-from typing import Any
+import os
 
-import hydra
-from omegaconf import DictConfig, OmegaConf
+# BEFORE any `tracking.*` import. `import tracking.run` itself pulls in mujoco
+# (measured 2026-09-15), and mujoco resolves its rendering backend once, at
+# import. `viz/sidebyside.py` does this same setdefault at ITS module level,
+# which is far too late through this entry point -- mujoco has been in memory
+# since the first import, already bound to GLFW, and every one of the Session1
+# campaign's 40 sidebyside tasks died on
+# `GLFWError: Failed to detect any supported platform`. That module's
+# setdefault only ever worked because the standalone script imported it first.
+# `setdefault`, not assignment: a caller who picked osmesa or glfw deliberately
+# keeps it.
+os.environ.setdefault("MUJOCO_GL", "egl")
 
-import tracking.utils.path_utils  # noqa: F401 -- registers ${repo_root:} etc. before compose
-from tracking.conventions import NotFit
-from tracking.pipeline import plan as P
-from tracking.pipeline import stages as S
-from tracking.pipeline.stages import stage_by_name
-from tracking.pipeline.timing import timed
+import sys  # noqa: E402
+from pathlib import Path  # noqa: E402
+from typing import Any  # noqa: E402
+
+import hydra  # noqa: E402
+from omegaconf import DictConfig, OmegaConf  # noqa: E402
+
+import tracking.utils.path_utils  # noqa: F401,E402 -- registers ${repo_root:} before compose
+from tracking.conventions import NotFit  # noqa: E402
+from tracking.pipeline import plan as P  # noqa: E402
+from tracking.pipeline import stages as S  # noqa: E402
+from tracking.pipeline.stages import stage_by_name  # noqa: E402
+from tracking.pipeline.timing import timed  # noqa: E402
 
 __all__ = ["main"]
 

@@ -20,8 +20,15 @@ gres: "gpu:1"
 # Nodes slurm reports healthy but where the CUDA plugin finds no usable device.
 # g3121 (2026-09-15): 3 tasks failed there with "no supported devices found for
 # platform CUDA" while 66 tasks succeeded on a100/a40/l40/l40s elsewhere,
-# including other l40s. Drop an entry once the node is fixed.
-exclude: g3121
+# including other l40s.
+# g3108 (2026-09-15): the Session1 campaign's ONLY non-render failures -- all
+# 17 of them, across ik, postprocess and kpvideo -- landed on this one node,
+# with `cuInit(0) failed: CUDA_ERROR_NO_DEVICE` and `NVML: Failed to get
+# Compute running process count`. 465 tasks COMPLETED on every other node.
+# The job body's `jax.default_backend()=='gpu'` assertion is what turned this
+# into a fast, loud exit instead of a silent CPU run.
+# Drop an entry once the node is fixed.
+exclude: g3121,g3108
 cpus_per_task: 8
 mem: "128G"
 # `fine` is one job over every bout of a recording; 8h left no headroom.

@@ -363,8 +363,19 @@ else:
 # LD_LIBRARY_PATH are what actually put 8 devices on jax.devices(). Both are
 # kept: `module load cuda` is harmless (measured identical to wheels-alone)
 # and is this cluster's convention.
+#
+# `MUJOCO_GL=egl` is exported HERE, in the environment, not left to
+# `viz/sidebyside.py`'s `os.environ.setdefault`. That setdefault runs at
+# module import, and the driver builds the anatomy -- importing mujoco --
+# in `_context`, BEFORE `_execute` imports the render module: mujoco has
+# already resolved its backend to GLFW by then. Measured 2026-09-15: all 40
+# `sidebyside` tasks of the Session1 campaign died with
+# `GLFWError: Failed to detect any supported platform` and then
+# `mjr_makeContext: an OpenGL platform library has not been loaded`.
+# An env var set before python starts cannot lose that race.
 _GPU_SETUP = (
     "module load cuda; "
+    "export MUJOCO_GL=egl; "
     'SP=$(python -c "import nvidia, pathlib; print(pathlib.Path(nvidia.__file__).parent)"); '
     'export LD_LIBRARY_PATH="$(ls -d "$SP"/*/lib | tr \'\\n\' \':\')$LD_LIBRARY_PATH"; '
     "unset JAX_PLATFORMS; "
