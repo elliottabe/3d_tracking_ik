@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 os.environ.setdefault("MUJOCO_GL", "egl")
@@ -293,8 +294,20 @@ def render_sidebyside(
                 _draw(real, kp2d[t, ci], vis, PALETTE["white"], chains_idx)
 
                 cx, cy = (int(np.median(rig_uv[:, 0])), int(np.median(rig_uv[:, 1])))
-                x0, y0 = max(0, cx - pad), max(0, cy - pad)
-                x1, y1 = min(width, cx + pad), min(height, cy + pad)
+                # A FIXED-SIZE window, shifted to stay inside the frame -- never
+                # clamped to it. Clamping shrank the crop whenever the fly came
+                # near an arena edge, so the size depended on where the fly was:
+                # sampled frames came out different sizes and the writer refused
+                # the movie with "All images in a movie should have same size".
+                # Measured 2026-09-15: 84 of Session1's sidebyside tasks, across
+                # 8 of 12 recordings. Session0's four hand-run bouts never hit an
+                # edge, which is why this shipped looking fine.
+                # The female works the walls, so she hits this far more than the
+                # male -- the hard fly is the one whose renders were lost.
+                bw, bh = min(2 * pad, width), min(2 * pad, height)
+                x0 = int(np.clip(cx - pad, 0, width - bw))
+                y0 = int(np.clip(cy - pad, 0, height - bh))
+                x1, y1 = x0 + bw, y0 + bh
                 left, right = real[y0:y1, x0:x1].copy(), rend[y0:y1, x0:x1].copy()
                 for im, lab in (
                     (left, f"{cn} REAL + observed 2D kp  f{t}"),
@@ -315,6 +328,21 @@ def render_sidebyside(
 
             if not rows:
                 continue
+            # A camera whose read() failed was `continue`d above, so this frame
+            # has fewer rows than its neighbours and would vstack SHORTER --
+            # the second, independent way to reach "All images in a movie
+            # should have same size", and one the fixed-size crop above cannot
+            # prevent. Skip such a frame, by name, rather than let a partial
+            # one set a size nothing else matches.
+            if len(rows) != len(cams):
+                missing = len(cams) - len(rows)
+                print(
+                    f"sidebyside {fly_dir}: frame {t} rendered {len(rows)}/"
+                    f"{len(cams)} cameras ({missing} unreadable) -- skipping "
+                    f"it; a short frame cannot share a movie with full ones",
+                    file=sys.stderr,
+                )
+                continue
             h = min(r.shape[0] for r in rows)
             w = min(r.shape[1] for r in rows)
             frame_imgs.append(np.vstack([r[:h, :w] for r in rows]))
@@ -326,6 +354,19 @@ def render_sidebyside(
         raise ValueError(
             f"{fly_dir}: every sampled frame ({frame_idxs}) had too few finite "
             f"fitted sites or an unreadable video frame -- nothing to render"
+        )
+
+    # Both size hazards are handled above, so a mismatch here means a THIRD
+    # cause nobody has seen yet. Name it: imageio's own "All images in a movie
+    # should have same size" says nothing about which frames, which bout-fly,
+    # or what the sizes were, and that cost a full campaign pass to diagnose.
+    shapes = {im.shape for im in frame_imgs}
+    if len(shapes) > 1:
+        raise ValueError(
+            f"{fly_dir}: sampled frames have {len(shapes)} different sizes "
+            f"{sorted(shapes)} -- every frame of one movie must match. The crop "
+            f"window is fixed-size and short frames are dropped, so this is a "
+            f"cause neither guard covers"
         )
 
     write_video(video_path, frame_imgs, fps=fps, macro_block_size=2)

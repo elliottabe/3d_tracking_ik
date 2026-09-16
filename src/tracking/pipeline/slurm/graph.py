@@ -340,8 +340,8 @@ def build_recording_chain(
     return jobs
 
 
-def _collect_gate(chain: Sequence[Job]) -> str:
-    """The job in `chain` that `collect` must wait for.
+def _collect_gate(chain: Sequence[Job]) -> str | None:
+    """The job in `chain` that `collect` must wait for, or `None` for no collect.
 
     `postprocess`, not `chain[-1]`. `collect_session` reads each bout-fly's
     `qc.json`/`outputs.h5` and the run's `floor.json` -- all written by
@@ -356,14 +356,24 @@ def _collect_gate(chain: Sequence[Job]) -> str:
     array task used to strand it. Renders are side outputs nothing downstream
     reads; they must not be able to withhold the data.
 
-    Falls back to the tail when `postprocess` was not requested (a
-    `--stages` subset that stops earlier), which is the honest answer for a
-    chain that has no postprocess job to wait for.
+    Returns `None` -- meaning "build no collect job for this recording" --
+    when the chain has no `postprocess`. This used to fall back to the
+    chain's tail, and that fallback put the coupling straight back: a
+    `--stages sidebyside` catch-up pass built a collect gating `afterok` on
+    the RENDER, so one failed render left a permanently stranded
+    `DependencyNeverSatisfied` collect (measured 2026-09-15, job 40200105).
+
+    No collect is the right answer, not an unconditional one. A chain
+    without `postprocess` is not producing the per-bout-fly `outputs.h5`
+    collect aggregates; those either already exist, in which case the
+    recording was already collected, or they do not, in which case
+    collecting now would describe a run that has not happened. A render-only
+    pass should render.
     """
     for job in chain:
         if job.stage == "postprocess":
             return job.name
-    return chain[-1].name
+    return None
 
 
 def build_session_graph(
@@ -477,6 +487,8 @@ def build_session_graph(
     # against `run_roots[recordings[0]]`, which aggregated recording 1 and
     # left the other N-1 with no scorecard and no combined h5 at all.
     for recording, sink in zip(recordings, sinks, strict=True):
+        if sink is None:
+            continue
         jobs.append(
             Job(
                 name=f"collect:{recording}",
