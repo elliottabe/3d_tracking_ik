@@ -27,11 +27,13 @@ A cold run is about 12 minutes; with the cache warm, restyling is seconds.
 | `floor_happy_house.xml` | the render arena (the shared `floor.xml` with its geom enabled) |
 | `cache/` | the computed panel arrays and rasters, one h5 per input |
 
-`fig4_analysis.py` and `fig4_assets.py` are **extracted, not rewritten** — every
-function body is byte-identical to the source. A reimplementation could change
-the science with no figure revealing it. If you edit either, verify it against a
-dataset whose answer is already known; an extraction can silently drop a branch
-that fires on only some bouts, and the figure will still look plausible.
+`fig4_analysis.py` and `fig4_assets.py` are **extracted, not rewritten** — their
+executable code came across unchanged from the source repo, though the comments
+and docstrings have since been trimmed, so they no longer diff cleanly against
+it. A reimplementation could change the science with no figure revealing it. If
+you edit either, verify it against a dataset whose answer is already known: an
+extraction can silently drop a branch that fires on only some bouts, and the
+figure will still look plausible.
 
 ## Panels
 
