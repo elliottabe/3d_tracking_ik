@@ -42,8 +42,13 @@ dev = ["ruff"]
 # of the core list so a pipeline install does not pay for them.
 figures = [
     # scikit-learn: the Pslow/Pfast pulse classifier (PCA + GaussianMixture)
-    # behind Figure 4's panel F.
+    # behind Figure 4's panel F, and Figures 2 and 5c-d.
     "scikit-learn",
+    # seaborn: Figures 2, 3, 5a-b and 5c-d.
+    "seaborn",
+    # scikit-image: Figure 5f.
+    "scikit-image",
+    # cuml/cupy are deliberately NOT here; see the `rapids` extra below.
     # mujoco_visualizer: the styled two-fly render behind panel H. Not on
     # PyPI, so it is pinned by commit the way jaxls is -- and pinned rather
     # than tracking main because the panel's appearance depends on its
@@ -51,6 +56,24 @@ figures = [
     # re-read panel H afterwards. A local editable checkout still wins for
     # development.
     "mujoco_visualizer @ git+https://github.com/elliottabe/mujoco_visualizer.git@47aab238fb34eb07b58d21dcf20342171c4e6ba0",
+]
+# Optional GPU acceleration for Figure 2's embedding. Figure 2 imports these
+# inside a try/except and falls back to scikit-learn, so the figure is
+# reproducible without them; they only make it faster.
+#
+# Needs NVIDIA's index, which an extra cannot carry, so this will NOT resolve
+# from `pip install ".[rapids]"` alone:
+#
+#   uv pip install --extra-index-url=https://pypi.nvidia.com ".[rapids]"
+#
+# Measured before adding: installing these into the pipeline environment
+# DOWNGRADES numpy 2.5.3 -> 2.4.6 and pandas 3.0.5 -> 3.0.3, because cudf
+# pins them. numpy is the version the JAX and MuJoCo stack is tested against,
+# so prefer a separate environment for Figure 2 over perturbing this one.
+# cu12 wheels: correct for the `cuda-version >=12.2,<=12.9` this env pins.
+rapids = [
+    "cupy-cuda12x",
+    "cuml-cu12",
 ]
 
 [tool.hatch.metadata]

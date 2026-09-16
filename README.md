@@ -175,6 +175,34 @@ ik_output_combined_<anatomy>_<name>.h5    the combined dataset
 timing.json                 per-stage wall clock and GPU hours
 ```
 
+## Figures
+
+`Notebook_figures/` holds the paper figures: one notebook each for Figures 1,
+2, 3 and 5, and a script for Figure 4 (`Notebook_figures/Figure_4/`, with its
+own README). They need a few packages the pipeline itself does not:
+
+```bash
+uv pip install --python "$CONDA_PREFIX/bin/python" -e ".[figures]"
+```
+
+That brings in scikit-learn, seaborn and scikit-image, plus
+`mujoco_visualizer` for Figure 4's rendered panel.
+
+**Optional GPU acceleration.** Figure 2's embedding runs on RAPIDS when it is
+available and falls back to scikit-learn when it is not, so the figure is
+reproducible either way — RAPIDS only makes it faster. It needs NVIDIA's
+package index, which a Python extra cannot carry, so name it explicitly:
+
+```bash
+uv pip install --python "$CONDA_PREFIX/bin/python" \
+    --extra-index-url=https://pypi.nvidia.com -e ".[rapids]"
+```
+
+Installing it into the pipeline environment **downgrades numpy 2.5.3 to 2.4.6
+and pandas 3.0.5 to 3.0.3**, because `cudf` pins them — and numpy is the
+version this stack's JAX and MuJoCo builds are tested against. Prefer a
+separate environment for Figure 2 over perturbing a working pipeline install.
+
 ## Citation
 
 If you use this pipeline, please cite the paper:
