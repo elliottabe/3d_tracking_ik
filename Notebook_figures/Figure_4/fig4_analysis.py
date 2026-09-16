@@ -1,35 +1,6 @@
-"""Courtship analysis for Figure 4, extracted from the source repo.
-
-An AST trace of what the figure actually executes across
-`3d_tracking_dataset/utils/`: 82 definitions, bodies byte-identical to the
-source. Extracted rather than rewritten because a reimplementation could
-change the science with no figure revealing it.
-
-Provenance (source lines -> extracted):
-
-    song_analysis      1634 -> 1456   wing angles, pulse/sine detection
-    keypoint_filter    1404 ->  312   wing-tip identity repair, despiking
-    courtship_loader    778 ->  364   the per-pair driver
-    pair_validity       424 ->  281   per-fly and colocation validity
-    mvq_pitch_alignment 387 ->  336   panel J's per-bout pitch alignment
-    io_dict_to_hdf5     290 ->   86   h5 -> nested dict
-    locomotion          286 ->  221   centroid velocity, COM height, walking
-    pulse_types         205 ->  127   Pslow/Pfast PCA + GMM
-    sam3_female_com     178 ->  149   female COM from SAM3 masks
-    pulse_type_cache    153 ->  116   pooled pulse-type labelling
-    sex_id              140 ->  116   male/female from song + body length
-    stac_data_utils     787 ->    7   bout key ordering
-
-`sex_id` is kept even though the combined h5 carries `info/sex`: it still
-runs, and `make_figure4.py` checks its verdict against the h5 rather than
-trusting either one silently.
-"""
+"""Courtship analysis for Figure 4, extracted from the source repo."""
 from __future__ import annotations
 
-# The union of what the source modules imported at module level. jax and
-# omegaconf are deliberately absent: the traced functions reach them only on
-# branches this figure does not take (`enable_jax`, DictConfig configs), and
-# importing jax here would pull a GPU context into a plotting script.
 import dataclasses
 import fnmatch
 import json
@@ -88,16 +59,12 @@ def recursively_convert_appropriate_dicts_to_lists(data):
         return data
 
 def load(filename, ASLIST=False, enable_jax=False, auto_convert_lists=True):
-    """
-    Default: load a hdf5 file (saved with io_dict_to_hdf5.save function above) as a hierarchical
-    python dictionary (as described in the doc_string of io_dict_to_hdf5.save).
-    
-    Parameters:
+    """    Parameters:
     - ASLIST: if True, loads the top level as a list (requires integer convertible keys)
     - enable_jax: if True, converts numeric data to JAX arrays while preserving strings
     - auto_convert_lists: if True, automatically detects and converts dictionaries that 
       were originally lists back to lists (based on consecutive integer string keys)
-    
+
     Both ASLIST and enable_jax can be used together - JAX conversion will be applied to appropriate data types
     while maintaining list structure for containers.
     """
@@ -118,9 +85,7 @@ def load(filename, ASLIST=False, enable_jax=False, auto_convert_lists=True):
         return out
 
 def recursively_load_dict_contents_from_group(h5file, path, enable_jax=False):
-    """
-    ....
-    """
+    """"""
     ans = {}
     for key, item in h5file[path].items():
         if isinstance(item, h5py._hl.dataset.Dataset):
@@ -173,22 +138,6 @@ def despike_isolated_spikes(
     verbose: bool = False,
 ) -> Tuple[np.ndarray, int]:
     """Remove tracking glitches via velocity-reversal detection.
-
-    Each pass finds frames where the jump in is large, the jump out is
-    large, and the two jumps have opposite signs (immediate reversal).
-    Flagged frames are replaced with the average of their neighbours.
-
-    With ``max_iterations=1`` (default), only true single-frame spikes are
-    fixed — safe for signals with fast oscillations like male wing song.
-
-    With ``max_iterations>1``, multi-frame glitches are peeled from the
-    outside in: a 3-frame spike becomes a 2-frame spike after pass 1,
-    then a 1-frame spike after pass 2, fully fixed by pass 3.  Use higher
-    values only for signals where multi-frame tracking errors are expected
-    and real fast oscillations are absent (e.g. non-singing flies).
-
-    Works on arrays of any shape whose first axis is time:
-    ``(T,)``, ``(T, D)``, ``(T, N, 3)``, etc.
 
     Parameters
     ----------
@@ -276,32 +225,6 @@ def repair_wing_tip_identity_swaps(
 ) -> Tuple[np.ndarray, np.ndarray, int]:
     """Fix short-run wing-tip identity swaps between two tracked flies.
 
-    During close-contact courtship the JARVIS multi-animal tracker occasionally
-    assigns fly0's wing-tip to fly1 (or vice versa) for a short contiguous run
-    of frames ("flicker").  Per-fly despike can't remove this because each
-    fly's trajectory contains a real wing-tip position — just the wrong one.
-
-    Each wing is handled independently.  For every transition ``i`` (between
-    frames ``i`` and ``i+1``) we compare two hypotheses for this single wing:
-
-    * ``keep``  — the two tracks continue as-is
-    * ``swap``  — fly0's and fly1's wing identities switch at frame ``i+1``
-
-    Transitions where ``cost(keep) − cost(swap) > threshold_mm`` are marked
-    as flip events.  The per-transition cost is label-symmetric under a
-    global swap, so absolute parity can't be recovered from cost alone.
-    To avoid any global-parity ambiguity, we only act on **short** runs
-    between consecutive flip events: when two flip events at ``t_a < t_b``
-    are separated by ``t_b − t_a <= max_flicker_frames`` frames, the region
-    ``[t_a+1, t_b]`` is treated as a flicker and its wing identities are
-    exchanged.  Long regions are left untouched — if the tracker held a
-    state for hundreds of frames, we trust that state.
-
-    Only the two wing-tip keypoints are modified; all other keypoints pass
-    through unchanged.  ``max_iterations`` is retained for symmetry with
-    :func:`despike_isolated_spikes`; iterations exit early once no further
-    flips qualify.
-
     Parameters
     ----------
     kp0, kp1 : ndarray, shape (T, N, 3)
@@ -378,10 +301,6 @@ def repair_wing_tip_identity_swaps(
         flip = (keep - swap) > threshold_mm
         if not flip.any():
             return np.zeros(T, dtype=bool), 0
-        # Absolute parity is unrecoverable from cost alone, so we evaluate
-        # both interpretations and take whichever places more short runs —
-        # i.e., covers more plausible flicker frames.  The short-run length
-        # cap ensures neither parity ever proposes flipping a long region.
         parity0 = np.concatenate(([False], np.cumsum(flip) % 2 == 1))
         assign0 = _short_run_assignment(parity0)
         assign1 = _short_run_assignment(~parity0)
@@ -418,11 +337,6 @@ def medfilt_despike(
 ) -> Tuple[np.ndarray, int]:
     """Replace frames that deviate from a local median by more than a
     velocity-based threshold.
-
-    Designed for non-singing flies where multi-frame tracking excursions
-    are common (keypoint drifts to wrong feature for several frames).
-    NOT safe for fast oscillatory signals like male wing song — the median
-    filter will flatten real wing beats.
 
     Parameters
     ----------
@@ -505,11 +419,6 @@ class PairValidityConfig:
     swap_guard_frames: int = 5
     min_paired_frames: int = 30
     min_solo_frames: int = 30
-    # Identity-collapse detector. When > 0, frames where the two flies'
-    # ``colocation_centroid_kp`` are closer than this threshold are marked
-    # invalid for BOTH flies (see ``compute_colocation_mask``). 0 disables
-    # the check. For courtship, ~1.0 mm (half a Drosophila body length) is
-    # a reasonable floor.
     min_pair_separation_mm: float = 0.0
     colocation_centroid_kp: str = "Scutellum"
 
@@ -530,11 +439,7 @@ def _filter_valid(kp: np.ndarray, critical_idx: Sequence[int]) -> np.ndarray:
 def _ground_valid(
     kp: np.ndarray, ground_idx: Sequence[int], percentile: float, epsilon: float
 ) -> Tuple[np.ndarray, float]:
-    """Per-frame: at least one ground keypoint is within epsilon of the floor.
-
-    Floor z is estimated as the `percentile`-th percentile of the ground
-    keypoints' z values across the bout (ignoring NaNs).
-    """
+    """Per-frame: at least one ground keypoint is within epsilon of the floor."""
     if len(ground_idx) == 0:
         return np.ones(kp.shape[0], dtype=bool), float("nan")
     zs = kp[:, list(ground_idx), 2]  # (T, K)
@@ -567,16 +472,6 @@ def compute_colocation_mask(
     centroid_kp: str = "Scutellum",
 ) -> np.ndarray:
     """Per-frame mask flagging identity-collapse frames in a paired bout.
-
-    A frame is True iff the two flies' ``centroid_kp`` positions are
-    measurable and closer than ``min_separation_mm``. The JARVIS multi-peak
-    tracker occasionally produces two output tracks that both lock onto the
-    same physical animal (e.g. when one fly is occluded); that failure mode
-    shows up as an inter-fly centroid distance that collapses to ~0.
-
-    NaN handling: frames with any NaN in either centroid are returned as
-    False — we only invalidate frames we can actually measure. Downstream
-    validity logic will still drop NaN frames via ``_filter_valid``.
 
     Args:
         fly0_kp, fly1_kp: (T, N, 3) keypoints in a *shared* world frame.
@@ -697,9 +592,6 @@ def compute_pair_validity(
             raise ValueError(
                 f"swap_state length {swap.shape[0]} != bout length {T}"
             )
-        # Only the toggle events are uncertain — frames deep inside a stable
-        # (un)swapped segment are reliable because the relink correction has
-        # already been applied to the keypoints.
         toggles = np.zeros(T, dtype=bool)
         if T >= 2:
             toggles[1:] = swap[1:] != swap[:-1]
@@ -708,10 +600,6 @@ def compute_pair_validity(
     else:
         identity_valid = np.ones(T, dtype=bool)
 
-    # Identity-collapse detector. When enabled (min_pair_separation_mm > 0),
-    # frames where the two flies' centroid keypoints are closer than the
-    # threshold are treated as invalid for *both* flies — we have no way to
-    # tell which track was real, so the safe policy is to drop both.
     pair_colocated = compute_colocation_mask(
         fly0_kp,
         fly1_kp,
@@ -794,28 +682,11 @@ _REQUIRED_KP = (
 
 @dataclass
 class SongAnalysisConfig:
-    """All tunable parameters for the song detector.
-
-    Defaults reproduce
-    ``notebooks/Courtship_Song_Analysis.ipynb`` cell 20 exactly so
-    results from the paper notebook match the sandbox. The comments
-    note which frame-rate / unit assumptions each value makes.
-    """
+    """All tunable parameters for the song detector."""
 
     # Frame rate -------------------------------------------------------------
     fs: float = 800.0  # Hz — Johnson-lab courtship camera rate
 
-    # Pipeline selection -----------------------------------------------------
-    # Which detector(s) to run inside ``analyze_fly_song``:
-    #   "legacy" — only the FFT-spectrogram + bilateral derivative-peak
-    #              detector. ``frame_labels`` / ``summary`` come from it and
-    #              are mirrored under ``*_legacy``; no ``*_new`` keys.
-    #   "new"    — only the Butterworth+Hilbert pulse + multitaper F-test
-    #              sine detector. ``frame_labels`` / ``summary`` come from
-    #              it and are mirrored under ``*_new``; no ``*_legacy`` keys.
-    #   "both"   — run both in parallel. Primary keys still come from the
-    #              legacy detector (backward compatible); ``*_new`` is the
-    #              experimental detector.
     pipeline: str = "legacy"
 
     # ------------------------------------------------------------------ #
@@ -826,29 +697,12 @@ class SongAnalysisConfig:
     pulse_envelope_lp_hz: float = 25.0
     pulse_noise_floor_percentile: float = 50.0  # median of bandpassed |x|
     pulse_threshold_mult: float = 3.0           # T = mult * noise_floor.
-                                                #  Lowered from 4.0 after
-                                                #  hand-validation on bout 37:
-                                                #  a 12-pulse train at 32 ms
-                                                #  IPI had envelope peaks
-                                                #  right at 4×median of the
-                                                #  bandpassed signal, so
-                                                #  only 4/12 survived. 3× is
-                                                #  a stable noise floor the
-                                                #  envelope rarely touches
-                                                #  outside real pulses.
     pulse_min_dist_ms: float = 15.0
     pulse_dedupe_window_ms: float = 10.0        # keep-largest window
     pulse_isolation_window_ms: float = 120.0    # drop if no neighbor within
     pulse_train_max_median_ipi_ms: float = 80.0  # drop trains above this
     pulse_train_min_n: int = 2
     pulse_mask_half_width_ms: float = 12.0
-    # Spectral-ratio gate: reject candidate peaks where the local
-    # pulse-band (200-380 Hz) envelope is weaker than this fraction of the
-    # local sine-band (80-200 Hz) envelope. Kills false pulses produced by
-    # sine-harmonic leakage on all-sine bouts where the noise-floor
-    # estimate collapses. 0.5 preserves real pulses (bout 37: 12/12) while
-    # eliminating sine-leakage false pulses (bout 61: 7→0).
-    # Set to 0 to disable.
     pulse_spectral_ratio_min: float = 0.5
 
     # ------------------------------------------------------------------ #
@@ -862,28 +716,10 @@ class SongAnalysisConfig:
     sine_dpss_NW: float = 3.0
     sine_dpss_K: int = 5                        # ≈ 2*NW - 1
     sine_f_test_p: float = 0.05                 # Raw per-window F-test p
-                                                #  threshold (no Bonferroni
-                                                #  correction). Chaining + the
-                                                #  80 ms min-segment gate
-                                                #  already require 8+
-                                                #  consecutive freq-consistent
-                                                #  windows, which provides
-                                                #  strong segment-level
-                                                #  control. Bonferroni on top
-                                                #  of that was over-conservative
-                                                #  because courtship sine is
-                                                #  modulated (F~6-10, not
-                                                #  pure-line-huge) — applying
-                                                #  the correction dropped ~2/3
-                                                #  of real sine windows on
-                                                #  bouts 23/27.
     sine_noise_floor_percentile: float = 25.0   # per-window power gate uses
                                                 #  this percentile of window
                                                 #  band-power as floor
     sine_noise_floor_mult: float = 0.5          # gate = mult * pct(power).
-                                                #  0.5 * pct25 only drops the
-                                                #  lowest-energy windows; 1.0
-                                                #  * median drops half.
     sine_freq_tolerance: float = 0.20           # ±20% for chaining
     sine_min_segment_ms: float = 80.0
     sine_pulse_overlap_max: float = 0.5         # reject windows with more
@@ -912,25 +748,8 @@ class SongAnalysisConfig:
     pulse_detect_prominence: float = 15.0
     pulse_detect_min_dist_ms: float = 15.0
     pulse_detect_half_width_ms: float = 12.0
-    # Max gap between consecutive detected peaks that still counts as the
-    # same pulse train. Normal D. melanogaster inter-pulse intervals are
-    # ~35 ms; a single missed peak doubles that to ~70 ms, two missed peaks
-    # gives ~105 ms, three gives ~140 ms. 135 ms tolerates up to 3 dropped
-    # peaks while staying below the shortest observed sine-straddling gap
-    # (148.8 ms in pair bout 23 — last pulse before and first pulse after a
-    # sine passage). True inter-train silences are typically >250 ms, so
-    # 135 ms stays well below that floor.
     pulse_train_max_gap_ms: float = 135.0
-    # Minimum ratio of peak height to local baseline |dZ/dt|. True pulses
-    # stand ≥3-4× above the inter-pulse baseline; individual sine-carrier
-    # cycles only rise ~1.5-2.5× above the sustained carrier energy, so
-    # this cleanly rejects false pulses inside strong sine song.
-    # Set to 0 to disable the filter.
     pulse_baseline_ratio_min: float = 3.0
-    # ± window (ms) used to compute the local |dZ/dt| baseline at each
-    # candidate peak. Must be wider than one inter-pulse interval (~35 ms)
-    # so a pulse train's baseline is dominated by inter-pulse silence
-    # rather than the pulses themselves.
     pulse_baseline_window_ms: float = 40.0
     # ± window (ms) around the peak itself to EXCLUDE from the baseline
     # computation (removes the peak's own width from the median).
@@ -939,13 +758,7 @@ class SongAnalysisConfig:
     # Per-pulse feature extraction (Clemens 2018 adapted to 800 Hz) ---------
     # 25 ms total window → 21 samples at 800 Hz (±10 frames + center).
     pulse_window_ms: float = 25.0
-    # Min pulses in a bout before per-bout Pslow/Pfast fractions are trusted
-    # as summary statistics (per-pulse features are still extracted either
-    # way; this just gates downstream aggregation).
     pulse_feature_min_n: int = 40
-    # Spectral center-of-mass threshold from Clemens (e^-1 of peak
-    # magnitude). Frequencies whose |X(f)| exceeds this fraction of the
-    # spectrum's maximum contribute to the carrier-frequency estimate.
     pulse_spectral_thresh: float = 0.3679
 
     # Wing activity detection (gating + dominant-wing choice) ---------------
@@ -970,11 +783,7 @@ class SongAnalysisConfig:
         return max(1, int(round(ms * 1e-3 * self.fs)))
 
 def resolve_kp_indices(kp_names: Sequence[str]) -> Dict[str, int]:
-    """Return a ``{name: index}`` dict for the keypoints the detector needs.
-
-    Raises ``KeyError`` if any required keypoint is missing, so callers fail
-    loudly instead of silently computing garbage.
-    """
+    """Return a ``{name: index}`` dict for the keypoints the detector needs."""
     names = list(kp_names)
     out: Dict[str, int] = {}
     missing: List[str] = []
@@ -994,12 +803,7 @@ def compute_wing_extension_angles(
     xpos_ego: np.ndarray,
     kp_idx: Dict[str, int],
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Wing extension angle (deg) from egocentric keypoints.
-
-    For each wing, returns the angle between the body axis
-    (Scutellum → Antenna_Base) and the wing vector
-    (wing base → midpoint of V12, V13).
-    """
+    """Wing extension angle (deg) from egocentric keypoints."""
     scut = kp_idx["Scutellum"]
     ant = kp_idx["Antenna_Base"]
     wl_b = kp_idx["WingL_base"]
@@ -1028,15 +832,7 @@ def compute_wing_horizontal_angles(
     xpos_ego: np.ndarray,
     kp_idx: Dict[str, int],
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Wing horizontal-plane angle (deg) from egocentric keypoints.
-
-    Builds a body frame from Scutellum→Antenna_Base (fore-aft) and the
-    left/right wing bases (lateral), projects each wing vector into the
-    horizontal plane (perpendicular to the derived dorsal axis), and
-    returns the unsigned angle between the projection and the body
-    fore-aft line. 0° ≈ wing parallel to body axis (rest); 90° ≈ wing
-    perpendicular to the body axis (fully extended).
-    """
+    """Wing horizontal-plane angle (deg) from egocentric keypoints."""
     scut = kp_idx["Scutellum"]
     ant = kp_idx["Antenna_Base"]
     wl_b = kp_idx["WingL_base"]
@@ -1081,14 +877,7 @@ def extract_wing_joint_angles(
 def compute_wing_tip_signal(
     kp_world: np.ndarray, kp_idx: Dict[str, int]
 ) -> Dict[str, Dict[str, np.ndarray]]:
-    """Extract wing tip (x, y, z) traces from a (T, N, 3) keypoint array.
-
-    Uses RAW world-frame keypoints (``kp_data``) rather than the IK-
-    reconstructed ``xpos_egocentric`` because the IK output misses real
-    strokes in some bouts (noted in cell 21 of the sandbox). Absolute
-    position doesn't matter for FFT power or peak detection — only the
-    oscillation shape.
-    """
+    """Extract wing tip (x, y, z) traces from a (T, N, 3) keypoint array."""
     tip_map = {
         "WingL_V12": kp_idx["WingL_V12"],
         "WingL_V13": kp_idx["WingL_V13"],
@@ -1121,11 +910,7 @@ def detect_singing_frames(
     wing_data: Dict[str, Dict[str, np.ndarray]],
     cfg: SongAnalysisConfig,
 ) -> Tuple[np.ndarray, Dict[str, np.ndarray], str]:
-    """Mark frames with active wing oscillation and pick the dominant wing.
-
-    Returns ``(is_singing, activities, dominant_wing)`` where
-    ``dominant_wing`` is ``'L'`` or ``'R'``.
-    """
+    """Mark frames with active wing oscillation and pick the dominant wing."""
     activities = _wing_activity(
         wing_data, cfg.fs, cfg.wing_activity_window
     )
@@ -1237,32 +1022,7 @@ def _butter_lowpass(
 def _bilateral_pulse_mask_butterworth(
     z_L: np.ndarray, z_R: np.ndarray, cfg: SongAnalysisConfig
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Paper-accurate pulse detector.
-
-    Pipeline (adapted from FlySongSegmenter):
-
-    1. 4th-order zero-phase Butterworth bandpass at ``pulse_band_hz``
-       applied to each tip Z trace.
-    2. Hilbert amplitude envelope per side, then bilateral ``max``.
-    3. Zero-phase 4th-order Butterworth low-pass at ``pulse_envelope_lp_hz``
-       to smooth the envelope.
-    4. Noise floor from the bandpassed bilateral signal's
-       ``pulse_noise_floor_percentile`` value; threshold
-       ``T = pulse_threshold_mult * noise_floor``.
-    5. ``find_peaks`` on the smoothed envelope with ``height=T`` and
-       minimum inter-peak distance ``pulse_min_dist_ms``.
-    6. Dedupe: within ``pulse_dedupe_window_ms`` keep only the
-       largest-amplitude peak.
-    7. Isolation gate: drop peaks with no neighbor within
-       ``pulse_isolation_window_ms``.
-    8. Per-train IPI gate: group peaks into trains; drop trains whose
-       median IPI exceeds ``pulse_train_max_median_ipi_ms`` or that
-       contain fewer than ``pulse_train_min_n`` peaks.
-    9. Paint a per-frame mask ``±pulse_mask_half_width_ms`` around each
-       surviving peak and fill intra-train gaps.
-
-    Returns ``(mask, kept_peak_frames)``.
-    """
+    """Paper-accurate pulse detector."""
     z_L = _interp_nan(np.asarray(z_L, dtype=float))
     z_R = _interp_nan(np.asarray(z_R, dtype=float))
     n = len(z_L)
@@ -1286,9 +1046,6 @@ def _bilateral_pulse_mask_butterworth(
     env = np.maximum(env_L, env_R)
     env_lp = filtfilt(b_lp, a_lp, env)
 
-    # Sine-band envelope (80-200 Hz) for the spectral-ratio gate below.
-    # Computed alongside the pulse-band envelope so we can compare the two
-    # at each candidate peak and reject sine-harmonic leakage.
     if cfg.pulse_spectral_ratio_min > 0:
         b_bp_s, a_bp_s = _butter_bandpass(
             cfg.sine_band_hz[0],
@@ -1331,11 +1088,6 @@ def _bilateral_pulse_mask_butterworth(
         peaks = peaks[keep_mask]
         peaks.sort()
 
-    # Spectral-ratio gate: reject peaks whose local pulse-band envelope is
-    # weaker than ``pulse_spectral_ratio_min`` × local sine-band envelope.
-    # Real pulses have a sharp broadband transient that dominates the
-    # 200-380 Hz band; sine-harmonic leakage into the pulse band is always
-    # accompanied by much larger 80-200 Hz energy, so the ratio < 1.
     if len(peaks) and env_sine is not None:
         half_w = max(1, cfg.ms_to_frames(cfg.pulse_mask_half_width_ms))
         kept = []
@@ -1413,9 +1165,6 @@ def _thomson_f_test(
     # X_k(f): rFFT of tapered signal for each taper.
     tapered = tapers * x[None, :]                   # (K, N)
     Xk = np.fft.rfft(tapered, axis=1)               # (K, Nf)
-    # DC sum of each taper: only even-symmetric tapers (k=0,2,4,...) have
-    # non-zero DC, odd tapers cancel out — but we include all to stay
-    # general and they contribute ~0.
     U = tapers.sum(axis=1)                          # (K,)
     U_sq_sum = float((U * U).sum())
     if U_sq_sum <= 0:
@@ -1441,12 +1190,7 @@ def _classify_sine_multitaper(
     pulse_mask: np.ndarray,
     cfg: SongAnalysisConfig,
 ) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
-    """Paper-accurate sine detector (Thomson multitaper F-test).
-
-    Returns ``(frame_labels, window_features)`` where frame_labels contain
-    only ``{"pulse", "sine", "quiet"}`` (pulse frames come from the
-    provided ``pulse_mask``).
-    """
+    """Paper-accurate sine detector (Thomson multitaper F-test)."""
     z = _interp_nan(np.asarray(z, dtype=float))
     n = len(z)
     pulse_mask = np.asarray(pulse_mask, dtype=bool)
@@ -1540,21 +1284,8 @@ def _classify_sine_multitaper(
         window_freq[i] = float(f_band[idx_max])
         window_p[i] = float(_f_dist.sf(window_F[i], 2, dof2))
 
-    # Raw per-window F-test p threshold. We deliberately skip the Bonferroni
-    # correction across test-band bins because the downstream chaining gate
-    # (need ≥ ``sine_min_segment_ms / hop`` freq-consistent windows in a row
-    # within ±``sine_freq_tolerance``) already provides segment-level
-    # multiple-comparison control. Courtship sine is modulated, producing
-    # moderate F stats (~5-15) with raw p ~0.02-0.08 per window; Bonferroni
-    # at n_bins ≈ 9 dropped the effective threshold to ~0.0056, which
-    # rejected ~2/3 of real sine windows on hand-validated bouts 23/27.
     p_threshold_bonf = p_threshold
 
-    # Per-window power gate: mult × percentile of band-power across windows.
-    # Median (50th pct) is too aggressive when a bout has loud pulse regions
-    # whose interp-filtered residue inflates the median — genuine sine can
-    # end up below it. A lower percentile (e.g. 25th) tracks the quiet-window
-    # floor more faithfully.
     nz_power = window_power[window_power > 0]
     floor_power = (
         float(np.percentile(nz_power, cfg.sine_noise_floor_percentile))
@@ -1568,11 +1299,6 @@ def _classify_sine_multitaper(
         & (window_power >= power_gate)
     )
 
-    # Chain consecutive candidate windows with ±freq_tol frequency
-    # consistency. When a candidate's frequency doesn't match the running
-    # reference, we drop THIS window (don't close + reopen) so that noise
-    # regions with scattered F-test hits at random frequencies don't
-    # produce spurious short segments.
     segments: List[Tuple[int, int, float, int]] = []
     seg_open = False
     seg_start = 0
@@ -1623,10 +1349,6 @@ def _classify_sine_multitaper(
         # else: frequency inconsistent; skip this window without closing.
     _close_segment()
 
-    # Length gate + minimum-candidate gate: reject segments shorter than
-    # ``sine_min_segment_ms`` in frames OR segments whose span is padded
-    # out mostly by the window width itself (need enough matching windows
-    # to demonstrate a sustained signal).
     min_len = cfg.ms_to_frames(cfg.sine_min_segment_ms)
     min_cand_windows = max(2, min_len // max(1, hop))
     segments = [
@@ -1730,9 +1452,7 @@ def _classify_one_side_fft_legacy(
 def _bilateral_pulse_mask_legacy(
     z_L: np.ndarray, z_R: np.ndarray, cfg: SongAnalysisConfig
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Derivative-peak pulse detector on ``max(|dZ/dt|_L, |dZ/dt|_R)``.
-    Returns a per-frame mask (with intra-train gaps filled) and the peak
-    frame indices themselves. This is the primary pulse detector."""
+    """Derivative-peak pulse detector on ``max(|dZ/dt|_L, |dZ/dt|_R)``."""
     sig_L = np.abs(np.diff(z_L, prepend=z_L[0]) * cfg.fs)
     sig_R = np.abs(np.diff(z_R, prepend=z_R[0]) * cfg.fs)
     dz_max = np.maximum(sig_L, sig_R)
@@ -1746,11 +1466,6 @@ def _bilateral_pulse_mask_legacy(
         distance=min_dist,
     )
 
-    # Relative peak-to-baseline gate. For a true pulse the inter-pulse
-    # |dZ/dt| sits near the noise floor, so peak/baseline is large (≥4).
-    # For a strong sine carrier the baseline *is* the signal energy, so
-    # peak/baseline collapses toward ~1.5-2.5 and these candidates get
-    # dropped here before we paint the pulse mask.
     if len(peaks) and cfg.pulse_baseline_ratio_min > 0:
         w_base = cfg.ms_to_frames(cfg.pulse_baseline_window_ms)
         ex = cfg.ms_to_frames(cfg.pulse_baseline_exclude_ms)
@@ -1854,13 +1569,7 @@ def extract_pulse_waveforms(
     return waves, kept_frames
 
 def compute_pulse_symmetry(waveforms: np.ndarray) -> np.ndarray:
-    """Per-pulse symmetry index s (Clemens 2018 methods).
-
-        s = (a · flip(b)) / (||a|| ||b||)
-
-    where ``a`` is the first half and ``b`` the second half of the
-    aligned window. Pslow ≈ +0.3, Pfast ≈ −0.2. Returns (N,) float.
-    """
+    """Per-pulse symmetry index s (Clemens 2018 methods)."""
     waves = np.asarray(waveforms, dtype=float)
     if waves.ndim != 2 or waves.shape[0] == 0:
         return np.zeros(0, dtype=float)
@@ -1885,13 +1594,7 @@ def compute_pulse_carrier_freq(
     fs: float,
     thresh: float = 0.3679,
 ) -> np.ndarray:
-    """Per-pulse spectral center-of-mass frequency (Hz).
-
-    For each aligned pulse window, compute the rFFT magnitude, threshold
-    at ``thresh * max(|X(f)|)``, and return the energy-weighted mean
-    frequency across the surviving bins. Falls back to argmax on any
-    degenerate spectrum. Returns (N,) float.
-    """
+    """Per-pulse spectral center-of-mass frequency (Hz)."""
     waves = np.asarray(waveforms, dtype=float)
     if waves.ndim != 2 or waves.shape[0] == 0:
         return np.zeros(0, dtype=float)
@@ -1940,20 +1643,7 @@ def classify_song_both_sides(
     wing_data: Dict[str, Dict[str, np.ndarray]],
     cfg: SongAnalysisConfig,
 ) -> Dict[str, Dict[str, Optional[Tuple[np.ndarray, Dict[str, np.ndarray]]]]]:
-    """Run the requested detector pipeline(s) on L/R wings.
-
-    Honours ``cfg.pipeline``:
-        "legacy" — only the FFT + derivative-peak detector
-        "new"    — only the Butterworth + multitaper detector
-        "both"   — both pipelines
-
-    Skipped pipelines return ``None`` in their slot.
-
-    Returned shape:
-        {"L": {"legacy": (labels, features) or None,
-               "new":    (labels, features) or None},
-         "R": {...}}
-    """
+    """Run the requested detector pipeline(s) on L/R wings."""
     if cfg.pipeline not in ("legacy", "new", "both"):
         raise ValueError(
             f"cfg.pipeline must be 'legacy', 'new', or 'both'; "
@@ -2087,31 +1777,6 @@ def analyze_fly_song(
         ~pair_colocated``). Summaries are computed over valid frames
         only, but frame_labels cover all T frames so the caller can
         still plot them.
-
-    Returns a dict with:
-        ``wing_data``          — per-tip xyz traces
-        ``sides``              — {'L': {frame_labels, segments, summary,
-                                          window_features, pulse_features,
-                                          [*_legacy aliases], [*_new aliases]},
-                                  'R': {...}}.
-                                  ``cfg.pipeline`` controls which detector
-                                  fills the primary (unsuffixed) keys:
-                                  "legacy" → FFT + derivative-peak, no
-                                  ``*_new`` keys; "new" → Butterworth +
-                                  multitaper, no ``*_legacy`` keys; "both"
-                                  → primary stays legacy and ``*_new`` is
-                                  populated alongside.
-        ``dominant_wing``      — 'L' or 'R'
-        ``is_singing``         — (T,) bool gate
-        ``activities``         — per-tip windowed |dZ/dt|
-        ``angle_L, angle_R``   — (T,) wing extension angles (deg) if
-                                  xpos_ego was provided
-        ``joints``             — dict of wing DOFs if qpos was provided
-        ``summary``            — dominant-wing song_fraction + bout
-                                  metadata, from whichever pipeline
-                                  ``cfg.pipeline`` selects as primary
-        ``summary_legacy``     — present only if the legacy detector ran
-        ``summary_new``        — present only if the new detector ran
     """
     if cfg is None:
         cfg = SongAnalysisConfig()
@@ -2125,11 +1790,6 @@ def analyze_fly_song(
     wing_data = compute_wing_tip_signal(kp_world, kp_idx)
     is_singing, activities, dominant_wing = detect_singing_frames(wing_data, cfg)
 
-    # Run the detector pipeline(s) selected by ``cfg.pipeline`` and route
-    # the chosen one to the unsuffixed primary keys. ``*_legacy`` /
-    # ``*_new`` aliases are populated only for pipelines that actually ran.
-    # When ``cfg.pipeline == "both"`` the legacy detector keeps the primary
-    # slot (backward compatible).
     side_results = classify_song_both_sides(wing_data, cfg)
     primary_key = "new" if cfg.pipeline == "new" else "legacy"
     sides: Dict[str, Dict] = {}
@@ -2179,10 +1839,6 @@ def analyze_fly_song(
         angle_L, angle_R = compute_wing_extension_angles(xpe, kp_idx)
         horiz_angle_L, horiz_angle_R = compute_wing_horizontal_angles(xpe, kp_idx)
 
-    # Per-pulse features (Clemens 2018, adapted) --------------------------
-    # The bilateral peak detector stores the same peak frames under both
-    # 'L' and 'R' sides; we still compute waveform-based features per side
-    # because the tip-Z oscillation shape differs between wings.
     side_tip = {"L": cfg.left_tip, "R": cfg.right_tip}
     side_angle = {"L": angle_L, "R": angle_R}
     for sname in ("L", "R"):
@@ -2273,9 +1929,6 @@ def analyze_fly_song(
 
 @dataclass
 class SexIdConfig:
-    #: Minimum song_fraction gap required for the song-based rule to be
-    #: considered confident. If both flies sing with similar fractions
-    #: (e.g. 0.10 vs 0.11) we fall back to body length.
     min_song_gap: float = 0.02
     #: Below this absolute song fraction on BOTH flies, the bout is
     #: effectively silent — fall back to body length.
@@ -2421,10 +2074,7 @@ class LocomotionConfig:
     min_run_ms: float = 40.0        # minimum state duration before flipping
 
 def _smooth_xy(xy: np.ndarray, window: int, polyorder: int) -> np.ndarray:
-    """Row-wise Savitzky-Golay smoothing of a (T, 2 or 3) trajectory.
-
-    Falls back to the raw signal if the bout is shorter than ``window``.
-    """
+    """Row-wise Savitzky-Golay smoothing of a (T, 2 or 3) trajectory."""
     if window <= 1 or xy.shape[0] < window:
         return xy
     out = np.empty_like(xy, dtype=float)
@@ -2438,21 +2088,7 @@ def compute_centroid_velocity(
     cfg: Optional[LocomotionConfig] = None,
     body_length: Optional[float] = None,
 ) -> Dict[str, np.ndarray]:
-    """Forward / lateral speed + turn rate derived from the body axis.
-
-    Forward axis is a per-frame unit vector from ``forward_from_kp``
-    (Scutellum) to ``forward_to_kp`` (Antenna_Base). Speed is projected
-    onto this axis and its perpendicular in the horizontal plane.
-
-    Returns a dict with (T,) arrays:
-        ``speed``         — |centroid velocity| in data-units / s
-        ``forward_speed`` — signed projection onto the body heading
-        ``lateral_speed`` — signed perpendicular component (left +)
-        ``turn_rate``     — d(heading)/dt in deg/s (horizontal plane)
-        ``heading``       — (T,) rad, horizontal-plane heading angle
-        ``speed_bl``      — ``speed / body_length`` if body_length given
-        ``forward_speed_bl``, ``lateral_speed_bl`` — normalized variants
-    """
+    """Forward / lateral speed + turn rate derived from the body axis."""
     if cfg is None:
         cfg = LocomotionConfig()
     kp_world = np.asarray(kp_world)
@@ -2506,16 +2142,7 @@ def compute_com_height(
     cfg: Optional[LocomotionConfig] = None,
     centroid_kp: Optional[str] = None,
 ) -> Tuple[np.ndarray, float]:
-    """Per-frame COM Z above the estimated floor plane.
-
-    Floor Z is the ``floor_percentile``-th percentile of Z over the
-    matched ground keypoints for this single fly, using the same helper
-    that ``pair_validity.compute_pair_validity`` uses, so the two
-    modules agree on what "ground" means.
-
-    Returns ``(com_z, floor_z)`` where ``com_z`` is (T,) and equals
-    centroid Z minus ``floor_z``.
-    """
+    """Per-frame COM Z above the estimated floor plane."""
     if cfg is None:
         cfg = LocomotionConfig()
     kp_world = np.asarray(kp_world)
@@ -2752,11 +2379,7 @@ def fit_pulse_type_model(
 def classify_pulses(
     waveforms: np.ndarray, model: PulseTypeModel
 ) -> np.ndarray:
-    """Return (N,) array of ``'Pslow'`` / ``'Pfast'`` labels via the GMM.
-
-    Hard-assigns each pulse to its most-likely component, then maps
-    cluster IDs to type names via ``model.label_map``.
-    """
+    """Return (N,) array of ``'Pslow'`` / ``'Pfast'`` labels via the GMM."""
     waves = _as_float(waveforms)
     if waves.shape[0] == 0:
         return np.zeros(0, dtype=object)
@@ -2809,11 +2432,7 @@ def get_pulse_type_labels(
     cfg: Optional[PulseTypeConfig] = None,
     fs: float = 800.0,
 ) -> Dict[str, Any]:
-    """Fit one PulseTypeModel pooled across all pairs and classify each side.
-
-    Returns a dict with keys ``labels``, ``centroids``, ``counts``,
-    ``pooled_waveforms``, ``fs`` (see module docstring).
-    """
+    """Fit one PulseTypeModel pooled across all pairs and classify each side."""
     if cache_path is not None:
         cache_path = Path(cache_path)
         if cache_path.exists() and not force:
@@ -2919,9 +2538,6 @@ def _triangulate_point(
     p = np.asarray(uv, dtype=float)[mask]
     u = p[:, 0]
     v = p[:, 1]
-    # Two rows per camera of the standard DLT back-projection:
-    #   (L1 - u L9) X + (L2 - u L10) Y + (L3 - u L11) Z = u - L4
-    #   (L5 - v L9) X + (L6 - v L10) Y + (L7 - v L11) Z = v - L8
     A_u = np.stack(
         [L[:, 0] - u * L[:, 8], L[:, 1] - u * L[:, 9], L[:, 2] - u * L[:, 10]],
         axis=1,
@@ -3002,13 +2618,7 @@ def triangulate_sam3_female_com(
     return out
 
 def sam3_camera_index(calib_dir: str | Path, cam_csv_name: str) -> int:
-    """Return the SAM3-axis index for ``cam_csv_name`` in ``sorted(calib_dir)``.
-
-    The SAM3 ``packed``/``valid``/``centroids`` arrays are stored with cameras
-    in ``sorted(glob('Cam*_dlt.csv'))`` order (same convention as
-    :func:`triangulate_sam3_female_com`). This helper converts a camera CSV
-    filename (e.g. ``'Cam2012630_dlt.csv'``) into its SAM3 camera-axis slot.
-    """
+    """Return the SAM3-axis index for ``cam_csv_name`` in ``sorted(calib_dir)``."""
     files = sorted(Path(calib_dir).glob('Cam*_dlt.csv'))
     names = [f.name for f in files]
     if cam_csv_name not in names:
@@ -3021,12 +2631,7 @@ def unpack_sam3_masks_for_frames(
     fly_indices: Sequence[int],
     frame_indices: Sequence[int],
 ) -> list:
-    """Return one unpacked mask stack per fly, indexed by ``frame_indices``.
-
-    Output is ``[mask_fly0, mask_fly1, ...]`` where each element has shape
-    ``(len(frame_indices), H_full, W_full)`` of ``bool``. Invalid frames (per
-    the npz ``valid`` array) return an all-False mask for that slot.
-    """
+    """Return one unpacked mask stack per fly, indexed by ``frame_indices``."""
     with np.load(npz_path) as npz:
         packed = npz['packed']           # (n_flies, n_cams, T, H, W/8)
         valid = npz['valid']             # (n_flies, n_cams, T)
@@ -3061,13 +2666,7 @@ def _dlt_load(csv_path: str | Path) -> np.ndarray:
     return coeffs
 
 def body_pitch_deg_from_quat(quat_wxyz: np.ndarray) -> np.ndarray:
-    """Body-axis elevation in world frame from a MuJoCo quaternion.
-
-    ``quat_wxyz`` is ``(..., 4)`` in ``[w, x, y, z]`` order (MuJoCo free-joint
-    convention). The fly model's local ``+X`` is anterior, so the world-frame
-    forward vector's z component is ``2*(qx*qz - qw*qy)``; its arcsin is the
-    pitch-up angle of the thorax (positive = nose up).
-    """
+    """Body-axis elevation in world frame from a MuJoCo quaternion."""
     q = np.asarray(quat_wxyz, dtype=float)
     sin_p = 2.0 * (q[..., 1] * q[..., 3] - q[..., 0] * q[..., 2])
     return np.degrees(np.arcsin(np.clip(sin_p, -1.0, 1.0)))
@@ -3089,13 +2688,6 @@ class BoutRef:
     mask_npz: Path
     calib_dir: Path
 
-# In the source repo these two lived in `scripts/figures/export_fig4_bundle.py`
-# and `utils/mvq_pitch_alignment.py` reached them through a deferred import, to
-# avoid a utils -> scripts layering inversion. Here there is no layering to
-# invert, so they are inlined -- and they must be, because that deferred import
-# would otherwise silently reach back into the source repo. `_load_kp3d` in
-# particular carries the per-file keypoint-ORDER check, which is the guard
-# against measuring the wrong body part with perfectly plausible numbers.
 
 _DEFAULT_MALE_SLOT = 1
 
@@ -3104,34 +2696,6 @@ _DEFAULT_FEMALE_SLOT = 0
 def _load_kp3d(npz_path, expected_n_kp=None, expected_kp_names=None) -> np.ndarray:
     """Load the ``(T, 50, 3)`` ``kp3d`` array (TRUE DLT world frame) from a
     processed-pose-tree bout npz (``<pose_dir>/bouts/<bout>/fly{0,1}/kp3d.npz``).
-    Raises a clear error naming the path and the keys actually present when
-    ``kp3d`` is missing, rather than letting a bare KeyError propagate.
-
-    Round 11 finding D: every caller indexes this array by
-    ``kp_names.index(<name>)`` from the COMBINED h5's keypoint order,
-    assuming `kp3d`'s own second axis shares that order. Pre-MVQ `kp3d.npz`
-    files carry no keypoint-name list of their own to check against
-    (verified: their only keys are `kp3d`/`conf3d`) — the order match was
-    instead verified empirically (round 6): projecting `kp3d[:, 0, :]`
-    (`Scutellum`, index 0 in both the combined h5's `info/kp_names` and
-    `configs/anatomy/v1.yaml`'s `model.KP_NAMES` MODEL order) through the
-    Cam2012630 DLT landed at uv (1123.6, 118.6), matching `kp2d` ground
-    truth to within 3.3 px. `configs/detector/vitpose_v3.yaml`'s DETECTOR
-    order is DIFFERENT (Scutellum at index 3) — an unreordered array would
-    silently substitute a nearby keypoint (~1 mm off) and still look
-    plausible.
-
-    MVQ-era npz files ship their own ``kp_names`` array. When one is
-    present AND ``expected_kp_names`` is given, the two are compared
-    ELEMENTWISE and a mismatch raises, naming the first differing index --
-    turning the paragraph above from an assumption into a per-file check.
-    A count-only match (same length, different order) is exactly the
-    keypoint-order bug CLAUDE.md documents: a collapsed/scrambled pair
-    reads as a real landmark with EXCELLENT jitter and confidence, so this
-    refuses to load rather than let the caller index it wrong. When
-    `expected_n_kp` is given (with or without names), the array's keypoint
-    axis is also asserted against it, since count is the only guard left
-    for pre-MVQ files with no `kp_names` of their own.
     """
     with np.load(npz_path, allow_pickle=True) as z:
         if "kp3d" not in z.files:
@@ -3162,45 +2726,7 @@ def _load_kp3d(npz_path, expected_n_kp=None, expected_kp_names=None) -> np.ndarr
     return arr
 
 def _resolve_male_female_slots(sex_meta, sex_json=None, override=None) -> tuple:
-    """Return ``(male_slot, female_slot)``.
-
-    Round 10 finding: the mask SLOT is a FOURTH id scheme — distinct from
-    the combined h5's key0/key1 pairing (round 7) and the processed tree's
-    fly0/fly1 DIRECTORY naming — and was hardcoded (`fly_indices=[1, 0]`,
-    `fly_idx=0`).
-
-    Two independent sexers can disagree on which mask slot is male:
-    ``sex_meta`` (the SAM3 npz's own JSON string / dict, a mask-area VOTE —
-    on the real exemplar a weak one, agreement 0.429) and ``sex_json``
-    (``pose/bouts/<bout>/sex.json``, a dict — sometimes a HUMAN-CONFIRMED
-    review). Verified on the real exemplar: `sex_meta` says `male_slot=1`
-    and `sex_json` says `male_fly=1` (`confidence="user"`,
-    `method="manual-gui"`) — they AGREE here (an earlier draft of this
-    docstring wrongly claimed `sex_json` said `male_fly=0`/"INVERTED"; that
-    was a false comment, corrected — always re-read the real file rather
-    than trust a stale claim in code). Round 10's hardcode trusted only the
-    weaker `sex_meta` vote; on any bout where the two sexers disagree, that
-    could triangulate the MALE as the "female" COM (a degenerate male→male
-    vector) and swap the panel-A mask colours — exactly the dir-index/
-    mask-slot decoupling the repo's own sexing-canonicalization memory
-    warns about (round 11 finding B).
-
-    ``sex_json``'s `male_fly` is treated as authoritative ONLY when its
-    `confidence` is `"user"` or its `method` mentions "manual" (a human
-    review), never for a lower-confidence/automated `sex_json`. When BOTH a
-    human-confirmed `sex_json` and a `sex_meta` vote are present, they must
-    AGREE — a disagreement means neither can be trusted silently, so this
-    raises `ValueError` naming both values rather than picking one (the
-    figure would be meaningless with a degenerate male→male vector). When
-    only one source is present, that source's value is used. Falls back to
-    the documented default (`_DEFAULT_MALE_SLOT`, `_DEFAULT_FEMALE_SLOT`) —
-    matching the historical hardcode — only when NEITHER is present; the
-    caller should print when this fallback fires.
-    """
-    # An explicit operator decision wins outright. The guard below refuses to
-    # GUESS between disagreeing sexers; it should not block a human who has
-    # looked at the evidence and decided. Provenance is returned so the bundle
-    # meta records that this was an override, not an inference.
+    """Return ``(male_slot, female_slot)``."""
     if override is not None:
         m = int(override)
         return m, 1 - m
@@ -3235,41 +2761,7 @@ def _resolve_male_female_slots(sex_meta, sex_json=None, override=None) -> tuple:
 
 def _read_male_fly(sex_path: Path,
                    accept_authorities: Sequence[str] = ()) -> Optional[int]:
-    """`male_fly` from a human-reviewed sex.json, or None.
-
-    PORT NOTE -- `accept_authorities` is new here and defaults to EMPTY, so
-    with no argument this behaves exactly as the source does: human review
-    only. It exists because the `pose_v2_20260914` run has had no human
-    identity-review pass, and every one of its `sex.json` files instead
-    records `authority: "mvq_typed_slots"` with `confidence: "high"` and
-    per-fly `sex_prob` around 0.9999 / 7.6e-05. That is a RECORDED
-    determination, not the absent-value case this guard was built to catch --
-    the danger below is the DELEGATE'S DEFAULT firing and inverting a recorded
-    slot, which cannot happen when `male_fly` is explicitly present.
-
-    Naming an authority here is still not sufficient on its own, and
-    `make_figure4.py` does not treat it as such: it passes this together with
-    `h5_male_fly` built from the combined h5's own `info/sex` and
-    `on_conflict="raise"`, so the tree's answer and the h5's answer must
-    agree bout by bout. Two independent records agreeing is a stronger
-    guarantee than a single human pass, and a disagreement is fatal.
-
-    Important-1 (final review): this used to delegate the confidence/method
-    policy entirely to `_resolve_male_female_slots(None, meta)` and trust
-    whatever it returned. That function's contract is to fall back to a
-    hardcoded `_DEFAULT_MALE_SLOT=1` when NEITHER a human `sex_json` nor an
-    `sex_meta` vote is present -- correct for its OTHER callers, which want
-    an opinion. Called here with `sex_meta=None`, that fallback fires for
-    every non-human-reviewed `sex.json` too: demonstrated,
-    `{"male_fly": 0, "confidence": "auto"}` came back as `1` -- the RECORDED
-    SLOT INVERTED, with no raise and no skip. This function must never guess,
-    so the confidence/method test is applied HERE, before delegating, and a
-    sex.json that fails it returns None (the bout is then skipped by
-    `find_mvq_bouts`) rather than reaching the delegate's default at all.
-    Do not remove this check and go back to a bare delegate call --
-    `_resolve_male_female_slots`'s own default must stay as-is for its other
-    callers (see its docstring), so the guard belongs on this side.
-    """
+    """`male_fly` from a human-reviewed sex.json, or None."""
     try:
         meta = json.loads(sex_path.read_text())
     except Exception:                            # noqa: BLE001
@@ -3298,54 +2790,7 @@ def find_mvq_bouts(
     skipped: Optional[List[str]] = None,
     accept_authorities: Sequence[str] = (),
 ) -> List[BoutRef]:
-    """Discover every MVQ bout with the inputs the alignment needs.
-
-    Walks `<processed_root>/<bucket>/<recording>/<pose_dir>/bouts/bout_*`.
-    A bout is included only when its `sex.json`, both flies' `kp3d.npz`, its
-    `sam3_masks.npz` and its recording's `calibration/` are all present;
-    anything incomplete is skipped rather than guessed at.
-
-    Important-5 (final review): when `skipped` is given, every skip along the
-    way -- a missing `calibration/` dir, a missing/non-human-reviewed
-    `sex.json`, or a missing `kp3d.npz`/`sam3_masks.npz` -- appends a short,
-    specific reason naming the recording/bout and the path that was missing.
-    Before this, all four of those were a bare `continue`: if
-    `--courtship-video-root` pointed at the wrong tree, EVERY recording's
-    `calibration/` would 404 and the whole pool would empty with nothing in
-    `skipped` to say why -- the only message anywhere blamed
-    `--processed-root` instead (the arg actually responsible for kp3d/masks/
-    sex.json, not calibration). Do not go back to a silent `continue` for
-    any of these four checks.
-
-    `h5_male_fly` optionally maps `(recording, bout) -> male_fly` from the
-    combined h5's `info/male_fly`. When a bout appears in it with a value in
-    {0, 1} that disagrees with `sex.json`, this is a genuine conflict: the two
-    are independent records of the same human review, and a disagreement
-    means neither can be trusted silently. A value outside {0, 1} (observed:
-    -1, the h5's "not sexed" sentinel) carries no opinion and is skipped
-    rather than treated as a claim about which fly is male -- unaffected by
-    `on_conflict`, in either mode.
-
-    `on_conflict` governs a genuine 0-vs-1 conflict:
-      * "raise" (default) aborts discovery entirely, naming the bout. This is
-        correct for the LIVE pipeline and must stay the default: measured
-        160/160 agreement between `sex.json` and the current combined h5's
-        `info/male_fly` on this dataset, so a conflict here is a real defect
-        worth stopping for.
-      * "skip" excludes just the disputed bout (never guesses a slot for it)
-        and, if `skipped` is given, appends a human-readable reason to it so
-        the caller can report it rather than have the bout silently vanish.
-        This exists for rebuilding the LEGACY comparison figure: the legacy
-        h5's `info/male_fly` is -1 (the "unsexed" sentinel, already tolerated
-        above) for 238 of 300 entries and, where it DOES have an opinion,
-        disagrees with the LATER human review (`sex.json`, 2026-08-29,
-        status=confirmed) for exactly one bout
-        (Session1/2026_04_02_12_11_50/bout_00004) -- a stale source that
-        should declare itself explicitly via an opt-in flag rather than the
-        live pipeline quietly becoming more permissive.
-    An unrecognised `on_conflict` is an error, not a silent fallback to
-    either behaviour.
-    """
+    """Discover every MVQ bout with the inputs the alignment needs."""
     if on_conflict not in ("raise", "skip"):
         raise ValueError(
             f"on_conflict must be 'raise' or 'skip', got {on_conflict!r}")
@@ -3377,15 +2822,6 @@ def find_mvq_bouts(
                 continue
             if h5_male_fly is not None:
                 want = h5_male_fly.get((recording, bout))
-                # A value outside {0, 1} is the h5's "not sexed" sentinel, not
-                # a claim that the male is fly -1 (or fly 60) -- measured on
-                # ik_output_combined_v1_courtship_both.h5: info/male_fly is
-                # -1 for 238 of its 300 entries (plus 1 "60", 2 "0"), while
-                # the matching sex.json still carries a real human-reviewed
-                # answer. Raising on those would empty a whole figure panel
-                # over bouts that were simply never labelled in the h5. Only
-                # a genuine 0-vs-1 disagreement is a real conflict, and only
-                # THAT is subject to `on_conflict`.
                 if want is not None and int(want) in (0, 1) and int(want) != male:
                     reason = (
                         f"{recording}/{bout}: sex.json says male_fly={male} "
@@ -3418,11 +2854,7 @@ def find_mvq_bouts(
     return out
 
 def _body_pitch_deg(head: np.ndarray, scut: np.ndarray) -> np.ndarray:
-    """Elevation of the head above the scutellum, in degrees.
-
-    Copied unchanged from `utils.sam3_aligned_bouts._body_pitch_deg` so the
-    panel keeps measuring exactly what it published.
-    """
+    """Elevation of the head above the scutellum, in degrees."""
     vec = head - scut
     n = np.linalg.norm(vec, axis=-1)
     with np.errstate(invalid='ignore', divide='ignore'):
@@ -3439,17 +2871,7 @@ def _target_pitch_deg(male_scut: np.ndarray,
             vec[..., 2], n, out=np.full_like(n, np.nan), where=n > 0)))
 
 def _female_com(bout: BoutRef, kp_scale: float) -> np.ndarray:
-    """Triangulated female COM in the KP frame, from this bout's masks.
-
-    The camera order is taken from the npz's OWN `cameras` array rather than
-    `triangulate_sam3_female_com`'s glob-sorted default: the two are not
-    guaranteed to agree, and using the wrong one silently triangulates one
-    camera's centroid against another's calibration. This mirrors what the
-    exporter already does for the exemplar.
-
-    `kp_scale` converts DLT units to the KP frame, matching the exporter's
-    `/ args.kp_scale` on the same call.
-    """
+    """Triangulated female COM in the KP frame, from this bout's masks."""
     # `triangulate_sam3_female_com` is defined above in this merged
     # module; the source's deferred import would reach the source repo.
     with np.load(bout.mask_npz, allow_pickle=True) as z:
@@ -3470,44 +2892,7 @@ def compute_pitch_alignment_mvq(
     expected_kp_names=None,
     scut_com_offset_tol: Optional[float] = None,
 ) -> dict:
-    """Per-bout ``body_pitch - target_pitch`` traces and their median |value|.
-
-    Returns the same keys `compute_pitch_alignment_all_sessions` did --
-    `alignment_per_bout`, `bout_names`, `median_abs_alignment_deg` -- so the
-    exporter and the `courtship.pitch_violin` panel need no change, plus
-    `recordings` (the widened pool spans eleven, so a bout name alone is no
-    longer unique) and `skipped` (bouts that yielded no finite frame, reported
-    rather than silently dropped).
-
-    When `scut_com_offset_tol` is given, the male's own mask COM is
-    triangulated and compared against his `kp3d` Scutellum, in the same
-    world units as `kp3d` (not verified to be mm -- see the module's other
-    callers; do not call this quantity "mm" anywhere, including in the
-    raised error below). This is a UNIT-SANITY check, not an agreement
-    check: the expected distance is ~4.7 world units, NOT ~0, because a
-    triangulated 2D-mask centroid is not the scutellum. That offset is a
-    stable systematic bias -- measured 2026-09-11 over 22 bouts spanning all
-    eleven recordings, per-bout medians ran 3.72 to 5.33 (median-of-medians
-    4.68). Dropping the `/ kp_scale` conversion instead gives ~178, so the
-    default tolerance of 15.0 passes every observed bout with 2.8x headroom
-    while catching a 10x unit error with ~12x margin.
-
-    It ALSO discriminates a male/female SLOT SWAP, not just a unit error --
-    an accidental finding worth preserving on purpose: measured 2026-09-11
-    over 4 bouts across 3 recordings, the CORRECT slot gives 4.71-6.27 while
-    the WRONG slot (male_com computed against the female's own scutellum
-    instead of his) gives 25.1-54.9 -- 15.0 sits with 1.7x margin below the
-    lowest wrong-slot value and 3.3x above the highest correct one. Do NOT
-    tighten this toward the ~4.7 unit-check value or loosen it toward the
-    ~178 unit-error value without re-checking this margin -- either move
-    could silently remove the slot guard this tolerance also happens to
-    provide.
-
-    Do NOT tighten this toward zero: a `kp_scale` error tilts `target_pitch`
-    while leaving `body_pitch` untouched, which no smoothness or residual
-    check would catch -- but the two quantities are genuinely different
-    points on the animal, and a tight bound would reject correct data.
-    """
+    """Per-bout ``body_pitch - target_pitch`` traces and their median |value|."""
     per_bout: List[np.ndarray] = []
     summaries: List[float] = []
     names: List[str] = []
@@ -3515,16 +2900,6 @@ def compute_pitch_alignment_mvq(
     skipped: List[str] = []
 
     for b in bouts:
-        # Important-3 (final review): `expected_n_kp` must travel WITH
-        # `expected_kp_names`, not be omitted. `_load_kp3d`'s order check
-        # only runs when the npz carries its OWN `kp_names` -- every
-        # pre-reprocessing (legacy) file has none, so on that tree
-        # `kp_names` a few lines down falls back to `expected_kp_names`
-        # itself, and `kp_names.index(...)` below would run against an
-        # array that was never checked for length OR order. Passing the
-        # count here keeps the one guard that still applies on the legacy
-        # path (`_load_kp3d`'s `expected_n_kp` assert), so a keypoint-count
-        # mismatch still raises instead of indexing silently wrong.
         kp = _load_kp3d(b.kp3d_path,
                         expected_n_kp=(len(expected_kp_names)
                                        if expected_kp_names else None),
@@ -3542,9 +2917,6 @@ def compute_pitch_alignment_mvq(
         scut = kp[:T, kp_names.index(scut_name), :]
 
         if scut_com_offset_tol is not None:
-            # `_female_com` triangulates BoutRef.female_fly, so point that
-            # field at the male to get HIS mask COM. dataclasses.replace, not
-            # `**b.__dict__`, which relies on a frozen dataclass exposing one.
             male_com = _female_com(
                 dataclasses.replace(b, female_fly=b.male_fly), kp_scale)
             k = min(T, len(male_com))
@@ -3618,10 +2990,7 @@ def pair_bouts(
     bout_keys: Sequence[str],
     info: dict,
 ) -> List[Tuple[str, str]]:
-    """Pair consecutive fly0/fly1 bout keys using info['source_flies'].
-
-    Falls back to simple even/odd pairing when source_flies is absent.
-    """
+    """Pair consecutive fly0/fly1 bout keys using info['source_flies']."""
     src = list(info.get('source_flies', []))
     bucket = list(info.get('bucket', []))
     pairs: List[Tuple[str, str]] = []
@@ -3717,9 +3086,6 @@ def analyze_pair(
 ) -> dict:
     """Run full per-pair analysis: song, sex ID, male-first reorder, locomotion.
 
-    After this call, slot-0 is always male and slot-1 is always female.
-    Tracker-slot fields are preserved for provenance.
-
     Parameters
     ----------
     key0, key1 : str
@@ -3760,10 +3126,6 @@ def analyze_pair(
     if q0  is not None: q0  = q0[:T]
     if q1  is not None: q1  = q1[:T]
 
-    # Inter-fly wing-tip identity repair — fixes short-run JARVIS
-    # multi-animal swaps where fly0's wing tip was briefly assigned to fly1
-    # (or vice versa) during close contact.  Only modifies WingL_V13 /
-    # WingR_V13; all other keypoints pass through.
     if repair_wing_swaps:
         kp0, kp1, _ = repair_wing_tip_identity_swaps(kp0, kp1, kp_names)
 

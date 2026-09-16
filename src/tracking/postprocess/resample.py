@@ -1,31 +1,4 @@
-"""Resample a combined dataset to a target rate. A STANDALONE CLI, not a stage.
-
-    python -m tracking.postprocess.resample --in base.h5 --out padded_1000hz.h5 \
-        --target-hz 1000
-
-Resampling changes exactly two things: the length of the time axis, and the
-`target_hz` attr. Everything else -- dataset names, feature widths, the
-`qpos_names` group, `info`, and every other attr -- is copied through
-unchanged, because a consumer diffing a base file against its resampled sibling
-should see the time axis and nothing else.
-
-`source_hz` is READ from the file and required. It was set by `combine` from
-`recording.fps`, which the spec makes a required config field. A rate inferred
-from a frame count and a duration is how an 800 Hz recording silently becomes a
-1000 Hz one.
-
-Quaternions get their own path. Linear interpolation of (w, x, y, z) leaves a
-non-unit quaternion whose implied rotation is wrong, and `mju_quat2Mat` uses it
-without complaint. Interpolate, hemisphere-align, renormalise.
-
-`qpos` carries a quaternion too, not just `xquat`: columns 3:7 are the root
-free joint's orientation (`outputs.py`: `root_se3 = qpos[:, :7]`, layout
-`[x, y, z, qw, qx, qy, qz]`) whenever `qpos_names`' first seven entries are all
-named `"free"` -- MuJoCo's own name for every free-joint qpos entry, checked
-BY NAME (not position) because the layout after the free joint differs by
-anatomy. `qpos` is resampled linearly like any other array and then that
-4-column block is overwritten with a proper quaternion resample.
-"""
+"""Resample a combined dataset to a target rate. A STANDALONE CLI, not a stage."""
 
 from __future__ import annotations
 
@@ -41,11 +14,6 @@ from tracking.postprocess.combine import CONTRACT_DATASETS, EXTRA_DATASETS
 __all__ = ["resample_clip", "resample_file", "main"]
 
 _QUAT_DATASETS = ("xquat",)
-# Every time-axis dataset in the combined-file contract: CONTRACT_DATASETS
-# minus the two datasets that have no time axis (`clip_lengths` itself, and
-# the `qpos_names` group), plus EXTRA_DATASETS. Derived from the shared
-# constants rather than re-listed here, so a dataset added to the contract
-# in `combine` doesn't silently pass through unresampled.
 _TIME_DATASETS = (
     tuple(name for name in CONTRACT_DATASETS if name not in ("clip_lengths", "qpos_names"))
     + EXTRA_DATASETS
@@ -63,13 +31,7 @@ def _qpos_names_list(qpos_names_group: h5py.Group) -> list[str]:
 
 
 def _free_joint_quat_slice(qpos_names: list[str]) -> slice | None:
-    """`slice(3, 7)` when qpos starts with a 7-DOF free joint, else `None`.
-
-    By NAME: MuJoCo names all seven free-joint qpos entries "free" (checked on
-    v1 and on the v2_3 contract file, whose joint layouts otherwise differ
-    entirely). Position alone would be an assumption about a layout that
-    changes between anatomies -- v2_3 maps v1's wing DOFs onto legs.
-    """
+    """`slice(3, 7)` when qpos starts with a 7-DOF free joint, else `None`."""
     names = [n.decode() if isinstance(n, bytes) else str(n) for n in qpos_names]
     if len(names) >= 7 and all(n == "free" for n in names[:7]):
         return slice(3, 7)
@@ -77,11 +39,7 @@ def _free_joint_quat_slice(qpos_names: list[str]) -> slice | None:
 
 
 def resample_clip(values: np.ndarray, n_src: int, n_dst: int, *, kind: str) -> np.ndarray:
-    """`(T, ...)` -> `(n_dst, ...)`, reading only the first `n_src` rows.
-
-    `kind="quat"` hemisphere-aligns along time before interpolating and
-    renormalises afterwards; `kind="linear"` is a plain per-component interp.
-    """
+    """`(T, ...)` -> `(n_dst, ...)`, reading only the first `n_src` rows."""
     src = np.asarray(values[:n_src], np.float64)
     if n_dst == n_src:
         return src.astype(np.float32)
@@ -89,12 +47,6 @@ def resample_clip(values: np.ndarray, n_src: int, n_dst: int, *, kind: str) -> n
     t_dst = np.linspace(0.0, 1.0, n_dst)
     flat = src.reshape(n_src, -1)
     if kind == "quat":
-        # Sequential hemisphere alignment: q and -q are the same rotation, so a
-        # sign flip between neighbours makes linear interpolation swing the LONG
-        # way round -- through a tumble the animal never made. Each frame is
-        # compared against its ALREADY-ALIGNED predecessor; comparing against the
-        # original array instead leaves the dot products stale the moment the
-        # first flip lands, which silently fixes only isolated flips and not runs.
         q = src.reshape(n_src, -1, 4).copy()
         for t in range(1, n_src):
             dot = np.sum(q[t] * q[t - 1], axis=-1)
@@ -140,9 +92,6 @@ def resample_file(src_path, dst_path, *, target_hz: float) -> dict:
                     dst.create_dataset(name, data=node[()])
                     continue
                 data = node[()]
-                # A dataset declared time-axis but shaped otherwise (e.g. a
-                # future EXTRA_DATASETS entry with no time axis) fails loudly
-                # here instead of silently mis-resampling or shape-mismatching.
                 if data.ndim < 2 or data.shape[0] != lengths.shape[0]:
                     raise ValueError(
                         f"'{name}' is a declared time-axis dataset but has shape "
@@ -155,9 +104,6 @@ def resample_file(src_path, dst_path, *, target_hz: float) -> dict:
                     n_dst = int(new_lengths[i])
                     out[i, :n_dst] = resample_clip(data[i], int(lengths[i]), n_dst, kind=kind)
                     if name == "qpos" and quat_sl is not None:
-                        # qpos is not purely linear data: columns 3:7 are the
-                        # root free joint's quaternion and need the same
-                        # hemisphere-align + renormalise path as `xquat`.
                         block = data[i][:, quat_sl][:, None, :]
                         out[i, :n_dst, quat_sl] = resample_clip(
                             block, int(lengths[i]), n_dst, kind="quat"

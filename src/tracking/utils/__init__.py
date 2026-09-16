@@ -1,9 +1,4 @@
-"""Utilities for the package.
-
-Importing this subpackage registers the custom OmegaConf resolvers (via
-``path_utils``), so it's enough for ``main.py`` to import from here for configs
-to compose correctly.
-"""
+"""Utilities for the package."""
 
 from tracking.utils.path_utils import (
     convert_dict_to_path,

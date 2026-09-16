@@ -1,37 +1,5 @@
 """Compare two fitted marker models (two `offsets_*.h5`) on the same fly.
 
-Marker offsets are the one per-individual constant the whole IK rests on, and
-two offsets fits of the same data can disagree for reasons that no residual
-number distinguishes: a different local optimum, a different alternation, or a
-genuinely better marker model. This is the A/B that tells them apart.
-
-Each candidate offsets set gets its OWN full pose solve over the sample, from
-the same warm start, so neither is scored on the other's poses. Then:
-
-  A  per-keypoint mean marker error (fitted site vs observed keypoint), both
-     sets side by side, with the keypoints whose offsets differ most shaded.
-  B  a RIGID invariant the pose solve cannot touch: two markers on the SAME
-     body are a fixed distance apart, determined by the offsets alone. Compare
-     that model distance to the observed median distance in the data. Whichever
-     set sits closer to the black dot is the better marker model, and no pose
-     solve, local optimum or solver tuning can flatter it.
-  C  the two frames the FIRST candidate fits worst, in the x-z view: observed
-     keypoints against both fitted marker sets.
-
-**State the expectation before reading it.** If candidate 2 is the better
-marker model, A's bars for it are at or below candidate 1's and the gap is
-largest on the shaded keypoints; B's marks for it sit closer to the observed
-medians, especially for the largest-offset pairs (the wing veins); and in C its
-markers sit ON the observed keypoints where the other stands off. An
-improvement concentrated in one keypoint, or a B that goes the other way, means
-the residual number moved for a reason other than the marker model.
-
-Written for, and first run on, the finding in
-`.superpowers/sdd/2026-09-10-preprocess-ik-postprocess/task-8-fix-report.md`:
-`stac_mjx`'s pose solver caches the marker offsets into its compiled problem,
-so `Stac.fit_offsets`' pose solves never see the offsets it is fitting, and
-every `offsets_fly{N}.h5` it wrote is half an alternation.
-
 Usage
 -----
     python scripts/viz/offsets_marker_model_ab.py \

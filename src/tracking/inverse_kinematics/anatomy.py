@@ -1,47 +1,4 @@
-"""Anatomy config <-> MuJoCo model consistency: report and filter absent names.
-
-An anatomy config (`configs/anatomy/v1.yaml`, say) names bodies, joints and
-keypoints it expects the MuJoCo model to have. Two things can make that
-false: the config drifts from the XML (a name renamed or removed), or the
-RECORDING itself tracks less anatomy than the model defines -- an amputation
-cohort's fly is missing a leg, so it has no distal keypoint for it.
-
-`validate_anatomy` reports every configured name absent from the model,
-pure reporting, grouped by category (body / joint / site / keypoint) --
-never raises. `filter_anatomy` acts on that report: it returns a config
-whose name lists are intersected with what the model actually has, and (via
-`tracked_kp_names`) with what THIS recording actually tracked. `strict=True`
-(the default) RAISES on any name absent from the model; `strict=False`
-filters and announces every drop to stderr instead.
-
-`v1`'s own config must pass `filter_anatomy(cfg, mj_model, strict=True)`
-UNCHANGED -- the executable form of "the v1 base anatomy is complete". It is
-also what makes an incomplete anatomy config safe to use at all: a mismatched
-or amputee anatomy must filter explicitly and loudly (`strict=False`, one
-stderr line per drop) rather than have the solver silently fit a leg the fly
-does not have.
-
-Drops announce to stderr, never `warnings.warn`, which dedupes by (message,
-category, module, lineno): a batch driver calling `filter_anatomy` once per
-bout against the same config would warn on the first bout and go silent on
-every one after it in the same process.
-
-`validate_model_keys`/`KNOWN_MODEL_KEYS` are a second, independent check.
-`validate_anatomy`'s four categories catch a NAME the model doesn't have;
-this one catches a `model:` config KEY the schema doesn't know -- a typo
-(`ROOT_OPTIMIZATION_KEYPOINTT`) or a solver feature this repo does not have
-(`JAXLS_REG_GATE`). `validate_anatomy` calls it, so `filter_anatomy` and
-`load_anatomy` get both checks.
-
-`build_marker_model` iterates `kp_order`, not the config's pair dict, so the
-returned `site_idxs` is always in canonical keypoint order regardless of how
-the config happens to list its pairs.
-
-`load_anatomy` is the config boundary: the one surface here that ACCEPTS an
-OmegaConf `DictConfig`, because it is where Hydra hands the pipeline its
-config. `Anatomy` holds plain NumPy and a compiled `mujoco.MjModel` only --
-no JAX, no MJX; callers build the MJX model from `Anatomy.mj_model`.
-"""
+"""Anatomy config <-> MuJoCo model consistency: report and filter absent names."""
 
 from __future__ import annotations
 
@@ -57,11 +14,6 @@ import mujoco
 import numpy as np
 from omegaconf import OmegaConf
 
-# Registers the `${repo_root:}` OmegaConf resolver as an import side effect.
-# `configs/anatomy/v1.yaml`'s `root: ${repo_root:}/model` needs it resolved
-# before `load_anatomy` can find the MJCF file; nothing else in this module
-# imports `tracking.utils`, so without this the resolver may never be
-# registered and `cfg.mjcf_path` comes back with the literal `${...}` text.
 import tracking.utils.path_utils  # noqa: E402,F401
 from tracking.conventions import announce, nearest_key
 from tracking.io.names import Order, load_keypoint_order
@@ -84,10 +36,6 @@ class AnatomyMismatch(Exception):
     model does not have."""
 
 
-# A leg-tagged name carries `T{1,2,3}_{left,right}` somewhere in it (e.g.
-# `claw_T1_left`, `tarsus2_T3_right`, `coxa_abduct_T2_left`). Names with no
-# leg tag (thorax, head, wing, abdomen) are never leg-filtered by
-# `tracked_kp_names` -- amputation removes a LEG, not the trunk.
 _LEG_TAG_RE = re.compile(r"T([123])_(left|right)")
 
 
@@ -138,16 +86,6 @@ def _joint_candidates(cfg) -> set[str]:
     return set(cfg.get("joint_names", []) or []) | set(cfg.get("wing_names", []) or [])
 
 
-# The complete `model:` key schema: `configs/anatomy/v1.yaml`'s 36 keys plus
-# `SEGMENT_SCALES` (read by `build_marker_model` under `segment_calibration`)
-# and `JAXLS_SMOOTH_Q_MULT` (written into the offsets fit's config), neither of
-# which v1 carries. Six of the 36 are read by nothing here but stay KNOWN
-# anyway, because validating v1's own shipped config must announce nothing.
-#
-# Deliberately NOT known, so a config that sets one announces rather than being
-# silently obeyed by nobody: `JAXLS_ROBUST_DELTA`, `JAXLS_Q_REG_TO_REST`,
-# `JAXLS_REG_GATE`, `JAXLS_REG_GATE_SIGMA_DEG` -- the solver has no such
-# branches.
 KNOWN_MODEL_KEYS: frozenset[str] = frozenset(
     {
         "MJCF_PATH",
@@ -196,21 +134,7 @@ KNOWN_MODEL_KEYS: frozenset[str] = frozenset(
 
 
 def validate_model_keys(cfg) -> list[str]:
-    """Sorted keys of `cfg['model']` not in `KNOWN_MODEL_KEYS`; announces each.
-
-    A second, independent check from `validate_anatomy`'s four categories:
-    those catch a configured NAME (body/joint/site/keypoint) absent from the
-    model; this one catches a `model:` config KEY the schema doesn't
-    recognise at all -- a misspelling (`ROOT_OPTIMIZATION_KEYPOINTT`) is
-    indistinguishable from a legitimately pruned anatomy without a schema,
-    and a key naming a dropped solver feature (`JAXLS_REG_GATE`) would
-    otherwise be silently obeyed by nobody.
-
-    stderr, never `warnings.warn` -- same reasoning as `filter_anatomy`'s own
-    drop announcements (module docstring): a batch driver resolving the same
-    anatomy config once per bout must hear about a bad key on every bout, not
-    just the first.
-    """
+    """Sorted keys of `cfg['model']` not in `KNOWN_MODEL_KEYS`; announces each."""
     model_cfg = cfg["model"] if "model" in cfg else {}
     unknown = sorted(k for k in model_cfg if k not in KNOWN_MODEL_KEYS)
     for key in unknown:
@@ -221,27 +145,7 @@ def validate_model_keys(cfg) -> list[str]:
 
 
 def validate_anatomy(cfg, mj_model) -> dict[str, list[str]]:
-    """Report every name in `cfg` absent from `mj_model`, grouped by category.
-
-    Pure reporting: never raises, never mutates `cfg`. Returns
-    `{"body": [...], "joint": [...], "site": [...], "keypoint": [...]}`,
-    each a sorted list of offending names (empty when nothing is missing):
-
-      - "body": `body_names` + `end_eff_names` + `KEYPOINT_MODEL_PAIRS`
-        values, checked against the model's bodies.
-      - "joint": `joint_names` + `wing_names`, checked against the model's
-        joints.
-      - "site": an optional `site_names` list (most anatomy configs, `v1`
-        included, don't carry one -- always `[]` for them), checked against
-        the model's sites.
-      - "keypoint": `model.KP_NAMES`, checked via the `aligned[<name>]`
-        site-naming convention (CLAUDE.md) -- a keypoint is present iff the
-        model has that site, not iff its own name matches anything.
-
-    Also runs `validate_model_keys(cfg)` for its announcement side effect
-    (unknown `model:` keys), so every caller of `filter_anatomy`/
-    `load_anatomy` gets that check for free without asking for it by name.
-    """
+    """Report every name in `cfg` absent from `mj_model`, grouped by category."""
     validate_model_keys(cfg)
 
     model_cfg = cfg.get("model", {}) or {}
@@ -266,38 +170,6 @@ def _announce(category: str, name: str, reason: str) -> None:
 def filter_anatomy(cfg, mj_model, *, tracked_kp_names=None, strict: bool = True) -> dict[str, Any]:
     """Return a copy of `cfg` intersected with what `mj_model` has, and (when
     `tracked_kp_names` is given) with what this recording tracked.
-
-    `strict=True` (the default) RAISES `AnatomyMismatch` on any configured
-    name absent from the MODEL (`validate_anatomy`'s report) -- a real
-    config/XML mismatch, not something a caller should ever want silently
-    dropped. `v1` must pass this call unchanged; that is this module's own
-    correctness test. `tracked_kp_names` narrowing is NOT a mismatch (a
-    recording legitimately tracking fewer keypoints than the model defines
-    is the expected amputation case) and is applied under `strict=True` too
-    -- only model-absence raises.
-
-    `strict=False` additionally filters model-absent names and announces
-    every drop to stderr (see the module docstring for why stderr, not
-    `warnings.warn`).
-
-    A leg-tagged body/joint (`claw_T1_left`, `femur_twist_T2_right`, ...) is
-    dropped under `tracked_kp_names` iff NO tracked keypoint carries that
-    leg's tag (`f"{tag}_"` prefix) -- i.e. the whole leg is untracked, the
-    amputation case. One guard: if every leg-tagged entry in a list would be
-    dropped this way, the
-    unfiltered (model-valid) list is kept instead -- `tracked_kp_names`
-    losing every leg at once is almost always a caller mistake (empty or
-    wrong keypoint list), not a fly with no legs left, so this never
-    proposes an anatomy with nothing left in it.
-
-    `KEYPOINT_INITIAL_OFFSETS` / `KEYPOINT_COLOR_PAIRS` / `KEYPOINT_WEIGHTS`
-    / `SITES_TO_REGULARIZE` / `JAXLS_ORIENTATION_KEYPOINTS` /
-    `INDIVIDUAL_PART_OPTIMIZATION` are left exactly as configured: they are
-    keyed LOOKUPS (or, for the last, a leg-tag-keyed list of joint names),
-    not lists a caller enumerates to discover which keypoints/legs exist, so
-    a stale entry naming a keypoint or leg this call dropped is inert -- a
-    caller must still walk from the filtered `KP_NAMES`/`body_names`/
-    `joint_names`, never from these.
     """
     report = validate_anatomy(cfg, mj_model)
     absent = {category: names for category, names in report.items() if names}
@@ -372,10 +244,6 @@ def filter_anatomy(cfg, mj_model, *, tracked_kp_names=None, strict: bool = True)
     return out
 
 
-# Keys are plain `int`, not `mujoco.mjtJoint` members: mujoco 3.13 raises
-# `KeyError: np.int32(0)` looking a numpy scalar up in an enum-keyed dict
-# (pybind11's `__eq__` against a numpy integer changed after 3.11). Hence every
-# `int(...)` around an `mjt*` member or a `jnt_type[...]` read below.
 _JOINT_TYPE_DIMS: dict[int, int] = {
     int(mujoco.mjtJoint.mjJNT_FREE): 7,
     int(mujoco.mjtJoint.mjJNT_BALL): 4,
@@ -399,20 +267,7 @@ _FREE = int(mujoco.mjtJoint.mjJNT_FREE)
 
 
 def align_joint_dims(mj_model) -> tuple[np.ndarray, np.ndarray, list[str]]:
-    """Per-qpos lower/upper bounds and joint name, one entry per qpos SLOT.
-
-    A free joint occupies 7 qpos slots under ONE name, a ball 4, hinge/slide
-    1 each, so
-    `len(names)` is `mj_model.nq`, not `mj_model.njnt` -- a per-JOINT list
-    would silently misalign every later per-qpos lookup. `jnt_range ==
-    (0, 0)` is MuJoCo's own "unconstrained" sentinel and is substituted with
-    a generous range per joint type; free joints always take that branch
-    (their own `jnt_range` is meaningless). The final `lb = min(lb, 0)` clamp
-    keeps `qpos = 0` always feasible (matters for the free joint's identity
-    quaternion) -- verified inert on v1 (0 of 87 joints have a positive lower
-    bound) but load-bearing on `two_hinge.xml`'s "clamped" joint, the only
-    fixture that can see it at all.
-    """
+    """Per-qpos lower/upper bounds and joint name, one entry per qpos SLOT."""
     lb_parts: list[np.ndarray] = []
     ub_parts: list[np.ndarray] = []
     names: list[str] = []
@@ -438,26 +293,7 @@ def align_joint_dims(mj_model) -> tuple[np.ndarray, np.ndarray, list[str]]:
 
 
 def build_marker_model(cfg, kp_order: Order) -> tuple[mujoco.MjModel, np.ndarray, np.ndarray]:
-    """Compile `cfg`'s MJCF with one marker site per keypoint added.
-
-    Iterates `kp_order.names` for both the site ADDITIONS and the returned
-    `site_idxs`, so the result is always in canonical keypoint order no matter
-    how `KEYPOINT_MODEL_PAIRS` happens to list its pairs. (v1's own config
-    cannot demonstrate the difference, because its `KEYPOINT_MODEL_PAIRS`
-    already happens to agree with `KP_NAMES` order.)
-
-    `cfg["mjcf_path"]` must already be a concrete, resolved path (that is
-    `load_anatomy`'s job -- this function never touches OmegaConf). Returns
-    `(mj_model, site_idxs, is_regularized)`: `site_idxs` is `(K,)` int32 in
-    `kp_order` order; `is_regularized` is `(K*3,)` float64, 1.0 where the
-    keypoint is in `SITES_TO_REGULARIZE` (`M_REG_COEF` uses this to pin a
-    site's fitted offset toward its initial guess).
-
-    `segment_calibration` / `SEGMENT_SCALES` (subject-specific per-segment
-    morphing) and a `SCALE_FACTOR` other than the identity are unimplemented
-    features with a config key each -- asking for one RAISES rather than being
-    silently ignored.
-    """
+    """Compile `cfg`'s MJCF with one marker site per keypoint added."""
     model_cfg = cfg["model"]
     if model_cfg.get("segment_calibration"):
         raise NotImplementedError(
@@ -512,22 +348,7 @@ def build_marker_model(cfg, kp_order: Order) -> tuple[mujoco.MjModel, np.ndarray
         if name in regularize:
             is_regularized[3 * i : 3 * i + 3] = 1.0
 
-    # `SITES_TO_FREEZE` is the LIMIT of regularization: the offset is held at
-    # its MJCF value and never optimised. `M_REG_COEF` is a compromise on both
-    # sides -- too small and a marker drifts off the body part it names, too
-    # large and the offsets solve diverges (100 and 1000 return NaN) -- while
-    # freezing has no coefficient and cannot diverge.
-    #
-    # Use it where the MJCF's site position is the anatomy you trust, e.g. the
-    # wing veins: their model sites sit 0.11x and 0.49x of the wing's
-    # half-thickness from the mesh, where an unregularized fit moved them 3.2x
-    # OFF it. A marker that leaves the thin wing surface forces the solve to
-    # rotate the wing to reach it -- a twisted wing no keypoint residual sees.
     freeze = set(model_cfg.get("SITES_TO_FREEZE", []) or [])
-    # A name that is not a keypoint here is INERT, not fatal: an amputation
-    # anatomy keeps entries for keypoints it just dropped. Announced anyway,
-    # because the other way a name lands here unmatched is a typo, and a
-    # misspelt entry freezes nothing while looking like it worked.
     unknown = sorted(freeze - set(kp_order.names))
     if unknown:
         print(
@@ -542,11 +363,6 @@ def build_marker_model(cfg, kp_order: Order) -> tuple[mujoco.MjModel, np.ndarray
         if name in freeze:
             is_frozen[3 * i : 3 * i + 3] = True
 
-    # Freezing dominates regularizing, so a site in both lists gets a
-    # regularization term that can never do anything. Announce rather than
-    # silently prefer one -- a config that says two things about one site is a
-    # question, not a default (stderr, not `warnings`, which dedupes per process
-    # and would show this once across a whole session's bouts).
     both = sorted(freeze & regularize)
     if both:
         print(
@@ -562,21 +378,7 @@ def build_marker_model(cfg, kp_order: Order) -> tuple[mujoco.MjModel, np.ndarray
 
 @dataclass(frozen=True)
 class Anatomy:
-    """An anatomy config, resolved against its compiled MuJoCo model.
-
-    Every model-derived quantity here -- `nq`/`nv`/`nbody`/`nsite`, the
-    marker-site indices, the per-qpos joint names, the joint bounds, and
-    `mocap_scale_factor` -- comes from the loaded model or the config, never
-    from a literal: v1 is 93/92/68/115(+50); v2_3 (Plan C) is a different
-    101/100/74 and maps its wing DOFs onto legs. `mj_model` already carries
-    one marker site per keypoint (`build_marker_model`); `site_idxs` locates
-    them BY NAME, in `kp_order` order, because on v1 they land at ids
-    55..164 with gaps -- no arithmetic on `nsite` reproduces them.
-
-    Pure MuJoCo and NumPy: no JAX, no MJX. `mj_model` binds no device, so this
-    is free to construct on CPU in a test with no GPU; the solver builds an MJX
-    model from `mj_model` when it needs one.
-    """
+    """An anatomy config, resolved against its compiled MuJoCo model."""
 
     name: str
     model_xml: Path
@@ -630,33 +432,7 @@ class Anatomy:
 
 
 def load_anatomy(cfg, *, tracked_kp_names=None, strict: bool = True) -> Anatomy:
-    """Load an anatomy config into an `Anatomy`: the config boundary (R12).
-
-    Unlike every `tracking.preprocess` surface, this ACCEPTS an OmegaConf
-    `DictConfig` and converts it -- deliberately: this is the one place in
-    the phase where Hydra hands the pipeline its config, so a refusal here
-    would just move the `OmegaConf.to_container` call into every caller.
-
-    `cfg["mjcf_path"]` (`configs/anatomy/v1.yaml`'s `root: ${repo_root:}/
-    model` / `mjcf_path: "${root}/..."`) is resolved by wrapping `cfg` in an
-    `OmegaConf` node and reading that ONE field with normal (lazy) attribute
-    access -- never `OmegaConf.to_container(cfg, resolve=True)` on the whole
-    tree, which raises: `model.MJCF_PATH: ${anatomy.mjcf_path}` names a
-    top-level `anatomy` key that exists only once Hydra has composed this
-    file under a real `anatomy:` group, so a blanket resolve fails on a
-    config loaded standalone (as every test here loads it) even though
-    `mjcf_path` alone resolves fine (`root` and `${repo_root:}` don't depend
-    on that missing key). `tracking.utils.path_utils` must have been
-    imported for `${repo_root:}` to be registered -- this module imports it
-    itself, so importing `tracking.inverse_kinematics.anatomy` is enough.
-
-    Flow: resolve `mjcf_path` -> compile the BASE model (no marker sites) so
-    `filter_anatomy` has something to check names against -> `filter_anatomy
-    (cfg, base_model, tracked_kp_names=tracked_kp_names, strict=strict)`,
-    which reaches `validate_anatomy`, which runs the `validate_model_keys`
-    schema check as a side effect -> `build_marker_model` on the FILTERED
-    config -> every `Anatomy` field derived from the resulting model.
-    """
+    """Load an anatomy config into an `Anatomy`: the config boundary (R12)."""
     cfg_for_path = cfg if OmegaConf.is_config(cfg) else OmegaConf.create(cfg)
     mjcf_path = Path(str(cfg_for_path.mjcf_path))
 
@@ -664,10 +440,6 @@ def load_anatomy(cfg, *, tracked_kp_names=None, strict: bool = True) -> Anatomy:
     filtered = dict(
         filter_anatomy(cfg, base_model, tracked_kp_names=tracked_kp_names, strict=strict)
     )
-    # `_to_plain` (inside `filter_anatomy`) keeps `mjcf_path` UNRESOLVED
-    # (resolve=False, for the reason in this module's docstring); substitute
-    # the concrete path computed above so `build_marker_model` -- which takes
-    # only plain values, never OmegaConf -- gets something it can compile.
     filtered["mjcf_path"] = str(mjcf_path)
 
     kp_order = load_keypoint_order(filtered)

@@ -1,53 +1,4 @@
-"""The mask-free FINE pass: video frames -> per-fly `kp2d.npz`/`kp3d.npz`.
-
-The coarse pass sweeps a whole recording at a wide stride to FIND bouts; this
-module lifts one bout at stride 1, frame by frame, into pipeline keypoints.
-Both share the same window-placement engine
-(`tracking_state.TrackedPlacementState`/`plan_windows_tracked`) and the same
-read rule (`mvq.runner.pick_typed_pair`).
-
-TWO SCHEDULING FACTS DRIVE THE DESIGN, both about the forward, not the model:
-
-  * `MVQRunner.infer` pads every forward to `runner.batch` rows -- one frame's
-    2 windows costs exactly what 16 cost. The pass is fast only if the batch
-    stays FULL.
-  * A tracked window's centre is a previous READ, so the naive schedule (frame
-    t needs frame t-1's forward) can never put two frames in one forward --
-    measured at ~2.3x the per-frame cost of the batched CenterDetect path.
-
-Hence `placement_lag` (default `DEFAULT_PLACEMENT_LAG`): frame t's window is
-centred on the fly's last-known-good centroid as of frame t-k, so k frames are
-in flight at once, AND the batch is shared ACROSS BOUTS -- `fine_track_bouts`
-advances every in-flight bout one frame per round, filling one forward from a
-single round even at lag 1. `bouts_in_flight` caps how many bouts (and so how
-many `reader_factory` decoder threads) are open at once.
-
-A miss is written NaN and left NaN: a keypoint the model never produced can
-only carry `conf3d = 0`, so an interpolated frame would either be inert or
-present a guess as an observation. `max_gap_frames` is REPORTED
-(`mvq_meta.json`'s `gap_runs`), never a silent interpolator -- gap filling
-happens downstream under its own budget.
-
-TWO SUPPORTED INPUTS, both wired into `fine_track_bouts` and both of which
-must keep working. `spec.init_centroid` (an `(F, 3)` world-unit seed) seeds
-each fly's track at the bout's first frame, so the first window is centred on
-the coarse pass's centroid rather than a fresh CenterDetect acquisition;
-`coarse_init_centroid` builds that seed from a recording's
-`coarse_tracks.npz`. `init_centroid=None` (the default) means CenterDetect
-acquires both flies on the bout's first frames instead -- the bout-summary
-route.
-
-**Keypoints and cameras BY NAME (CLAUDE.md).** The written keypoint axis is
-`kp_order` (canonical; `MVQRunner.to_pipeline` is the only permutation); the
-camera axis is `runner.cameras` (calibration-glob order).
-`_check_eye_invariant` checks that a rigid invariant (EyeL-EyeR spacing)
-survives the permutation unchanged.
-
-`kp3d.npz` carries the gate STRING (`fine_gate_string`); the full signature
-dict goes to `mvq_meta.json` -- one comparable value for the staleness check
-(`bout_is_current`), the detail where it belongs. `mvq_meta.json` and
-`sex.json` are per BOUT; `fly<f>/` holds only `kp2d.npz` and `kp3d.npz`.
-"""
+"""The mask-free FINE pass: video frames -> per-fly `kp2d.npz`/`kp3d.npz`."""
 
 from __future__ import annotations
 
@@ -80,26 +31,12 @@ from tracking.detector.tracking_state import (
 from tracking.io.artifacts import save_npz
 from tracking.io.names import Order
 
-# A run of consecutive missed frames longer than this is beyond what a
-# downstream short-gap fill will bridge -- so the bout has a genuine hole
-# there, reported (not silently interpolated). 40 frames = 50 ms at 800 fps.
 DEFAULT_MAX_GAP_FRAMES = 40
 
-# This route never merges two flies into one crop -- a window centred
-# BETWEEN two flies is out of the training distribution (windows are always
-# centred on ONE fly).
 DEFAULT_NO_MERGE = True
 
-# Ceiling on windows per frame: `num_animals` tracked flies plus at most
-# `num_animals` CenterDetect centres, so 4 at this pass's max of 2 (and safe
-# for 1). The scheduler reserves this many rows BEFORE planning a frame --
-# the reader is forward-only, so a frame that does not fit cannot be retried.
 MAX_WINDOWS_PER_FRAME = 4
 
-# Fixed placement-engine knobs this pass does not expose as parameters
-# (matching `coarse.py`'s own defaults) -- not gate-string knobs, so a run
-# that changed them would be indistinguishable from one that did not; the
-# values used are still recorded in `mvq_meta.json`.
 MERGE_DIST_UNITS = 30.0
 MIN_VIEWS = 3
 MAX_RESID_PX = 25.0
@@ -120,14 +57,7 @@ def resolve_min_vis(min_vis):
 
 
 def fine_gate_string(runner, *, placement_lag=None, no_merge=DEFAULT_NO_MERGE, min_vis="auto"):
-    """The Stage-B `gates` STRING stamped into a fine-lifted `kp3d.npz`.
-
-    Names the checkpoint/step/exist_thresh (via `runner`) plus the
-    mask-free window-placement knobs that decide WHERE a window was
-    centred: `placement` (fixed `"tracked"` -- the only mode this repo's
-    `tracking_state` implements), `placement_lag`, `no_merge`, `min_vis`. A
-    bout lifted at one lag is not current for a run configured at another.
-    """
+    """The Stage-B `gates` STRING stamped into a fine-lifted `kp3d.npz`."""
     lag = resolved_placement_lag(placement_lag)
     mv = resolve_min_vis(min_vis)
     return gate_string(
@@ -145,9 +75,6 @@ def fine_gate_string(runner, *, placement_lag=None, no_merge=DEFAULT_NO_MERGE, m
 def bout_is_current(out_dir, gate_string, n_flies=2):
     """True iff every `<out_dir>/fly<f>/kp3d.npz` exists and carries
     `gates == gate_string` exactly.
-
-    A bout that changed checkpoint, existence threshold or any placement
-    knob folded into `gate_string` is NOT current and must be re-lifted.
     """
     for fly in range(int(n_flies)):
         p = Path(out_dir) / f"fly{fly}" / "kp3d.npz"
@@ -163,26 +90,7 @@ def bout_is_current(out_dir, gate_string, n_flies=2):
 
 
 def coarse_init_centroid(tracks_npz, start_frame, *, max_dist_frames=None):
-    """Each fly's seed centroid for a bout, from a recording's coarse pass.
-
-    The coarse pass samples every `stride` frames, so a bout's first frame
-    almost never has a coarse sample of its own: take the NEAREST sample
-    (by frame distance) whose centroid is finite, per fly, falling back to
-    `None` entirely when nothing is within `max_dist_frames` (default: 4x
-    the file's own stride) of `start_frame` for ANY fly -- i.e. "let
-    CenterDetect acquire both flies" rather than a seed borrowed from
-    somewhere else in the recording, which would place the first windows on
-    the wrong side of the arena.
-
-    `tracks_npz` needs `coarse_frame` (T,) and `centroid` (F, T, 3) -- FLY
-    axis first, matching `coarse.write_coarse_tracks`'s own on-disk
-    convention exactly (CLAUDE.md: never guess an axis order from shape --
-    an earlier version of this function auto-detected which axis was time
-    by matching `len(coarse_frame)`, which reads the wrong axis silently on
-    any recording whose fly count happens to equal its coarse-frame count).
-
-    Returns `(F, 3)` float64, or `None` if no fly has a usable seed.
-    """
+    """Each fly's seed centroid for a bout, from a recording's coarse pass."""
     with np.load(str(tracks_npz), allow_pickle=True) as z:
         frame = np.asarray(z["coarse_frame"], np.int64)
         centroid = np.asarray(z["centroid"], np.float64)  # (F, T, 3)
@@ -234,19 +142,6 @@ def _mean_or_none(a):
 def _mvq_sex_json(sex_prob, exist, n_missing, T, *, sex_head_disagree_frac):
     """`sex.json`, mask-free-route schema only (identity is always "sex" here
     -- there are no masks and no human id review on this route).
-
-    `fly0`/`fly1` are the model's FEMALE/MALE typed slots by construction,
-    so `sex_head_disagree_frac` is 0 whenever every written frame's instance
-    matched its typed slot -- see the caller for how that fraction is
-    computed from `slot`.
-
-    `sex_prob`/`exist` carry the fly axis first (`(num_animals, T)`), which
-    is how many flies this bout has: `num_animals=1` (free-running) is the
-    SINGLE-FLY rule (`MVQRunner.read_typed`'s `SEX_UNKNOWN`) and returns
-    identity "unknown" rather than asserting a sex -- a free-running
-    recording has no partner to sex against, and reporting one would present
-    a guess as an observation, the same restraint this pipeline already
-    applies to a missing keypoint (CLAUDE.md).
     """
     n_flies = int(np.asarray(sex_prob).shape[0])
     pf = {f"fly{f}": _mean_or_none(sex_prob[f]) for f in range(n_flies)}
@@ -316,7 +211,6 @@ def _check_eye_invariant(
 ):
     """EyeL-EyeR spacing is a RIGID head landmark pair: a by-name permutation
     cannot change it, and a by-index one almost certainly does (CLAUDE.md).
-    A no-op unless both orders name both eyes.
     """
     if not (
         {"EyeL", "EyeR"} <= set(mvq_order.names) and {"EyeL", "EyeR"} <= set(pipeline_order.names)
@@ -360,10 +254,6 @@ def _pick_single_fly(out, off, nb, runner, assign_local, *, min_vis=None):
     own-window preference and highest-existence tie-break `pick_typed_pair`
     uses -- but no collapse guard, because there is no second fly to
     collapse against.
-
-    Returns `(picks, collapsed, dropped_fi, own)` in exactly `pick_typed_pair`'s
-    shape (`collapsed` always `False`, `dropped_fi` always `None`), so
-    `_BoutRun.record` can treat both the same way past this call.
     """
     cands = []
     for b in range(off, off + nb):
@@ -380,12 +270,7 @@ def _pick_single_fly(out, off, nb, runner, assign_local, *, min_vis=None):
 
 
 class _BoutRun:
-    """One bout's in-flight state and output arrays.
-
-    Deliberately dumb: it plans and records, never calls `infer` -- the
-    forward is the SHARED resource `fine_track_bouts` owns, and a bout that
-    could flush on its own would defeat the cross-bout batching.
-    """
+    """One bout's in-flight state and output arrays."""
 
     def __init__(
         self,
@@ -427,9 +312,6 @@ class _BoutRun:
         self.collapsed = np.zeros(T, bool)
         self.no_window = np.zeros(T, bool)
         self.n_collapsed = [0] * F
-        # `spec.init_centroid` seeds each fly's track at the bout's first
-        # frame (the coarse-track route); `None` means CenterDetect acquires
-        # both flies there instead. See the module docstring.
         self.tstate = TrackedPlacementState(
             F,
             merge_dist_units=merge_dist_units,
@@ -475,9 +357,6 @@ class _BoutRun:
             plan.was_tracked,
         )
         if wc.shape[0] == 0:
-            # Nothing tracked AND nothing detected: the row stays NaN. No
-            # `note_miss` -- an empty plan means no fly HAS a live track, so
-            # there is no age to advance.
             self.no_window[t] = True
             self.t += 1
             return None
@@ -572,9 +451,6 @@ def _finish_bout(run, *, kp_order, max_gap_frames, gate_signature, gate_extra, o
         runs[f"fly{fly}"] = gap_runs(missing)
 
     if n_flies == 2:
-        # `sex_head_disagree_frac` is 0 by construction on this route: the
-        # fly IS its typed slot. Recorded anyway, matching the masked
-        # lifter's sex.json schema.
         fly_slots = {"fly0": int(SLOT_FEMALE), "fly1": int(SLOT_MALE)}
         fly_sex = {"fly0": "female", "fly1": "male"}
         typed_slot = (int(SLOT_FEMALE), int(SLOT_MALE))
@@ -585,9 +461,6 @@ def _finish_bout(run, *, kp_order, max_gap_frames, gate_signature, gate_extra, o
                 float((run.slot[fly][wrote] != typed_slot[fly]).mean()) if wrote.any() else None
             )
     else:
-        # Single fly: `read_typed`'s SEX_UNKNOWN rule takes whichever typed
-        # slot the model produced each frame, so there is no FIXED slot or sex
-        # to name -- reporting one would present a guess as an observation.
         fly_slots = {"fly0": None}
         fly_sex = {"fly0": "unknown"}
         disagree = {"fly0": None}

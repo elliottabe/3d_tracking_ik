@@ -1,60 +1,4 @@
-"""One session's bout-flies gathered into the downstream analysis h5.
-
-SCOPE. One file per session by default (`combine_session`); pooling across
-sessions is explicit (`combine_many`). Each session carries ONE DLT
-calibration; pooling h5s with disjoint calibration frames averages them into a
-world centre that belongs to neither.
-
-LAYOUT. Two, and the default is NOT the padded one.
-
-`padded=False` (default) writes ONE GROUP PER CLIP -- `bout_000/`,
-`bout_001/`, ... each holding that clip's arrays at its OWN length. This is
-what `ik_output_combined_mvq_v2.h5` does and what downstream analysis reads.
-
-`padded=True` writes the `(N, Tmax, ...)` zero-padded stack that
-`Fruitfly_v2_3_walk_1000hz_interp_padded.h5` defines -- seven entries
-(`clip_lengths`, `kp_data`, `qpos`, `qvel`, `xpos`, `xquat`, the `qpos_names`
-GROUP) with its names, dtypes and axis order. That file is the RL dataset:
-its name says `interp_padded`, and padding exists there because an
-imitation-learning loader wants a rectangular tensor. Pair it with
-`postprocess.resample --target-hz` for the interpolation half.
-
-**Padding was this module's default until 2026-09-15, and that was a
-mistake.** Adopting the RL export's shape as the general analysis contract
-made 62.3% of every per-recording file zeros, and 79.5% of a pooled
-Session0+Session1 file -- 4.5 GB of 5.64 GB -- because pooling raises Tmax to
-the longest clip anywhere (3694) while the median clip is 655. Worse than the
-size: a consumer who forgets `clip_lengths` averages zeros into every
-statistic, silently, which is this repo's most expensive bug class.
-
-Both layouts carry `clip_lengths`, the `qpos_names` group, `site_xpos`,
-`xpos_egocentric` and the `info` group, and stamp `attrs["layout"]`.
-
-The contract file is anatomy v2_3 (nq=101); this pipeline is v1 (nq=93, wings
-at qpos 7-12, indices v2_3_ik maps onto LEGS). The comparison is STRUCTURAL.
-Nothing here may compare, assert or assume nq, nv or nbody -- they come from
-the model.
-
-EXCLUSIONS are recorded, never silent. A bout-fly whose solve produced nothing
-usable is dropped from the arrays and listed in `info/excluded` with its bout
-key, fly, sex and reason, and returned in the report for the session
-scorecard. Without this, 42/160 NaN-cost pairs once reached a published
-figure because nothing looked. Iteration is over fly DIRECTORIES
-(`bouts/bout_*/fly*`), not over `.../fly*/outputs.h5` -- a bout-fly the IK
-refused outright (no `outputs.h5` at all) is a directory with no file, and
-globbing the file made it invisible to `excluded` rather than merely absent
-from the arrays.
-
-IDENTITY. `sex`/`status`/`missing_fraction`/`fitted_px` are read via
-`tracking.qc.session.collect_rows`, the SAME per-bout-fly pass the session
-scorecard uses, so `info/` and `session_qc.json` cannot disagree about a
-clip's sex or quality. `fly_id`/`bucket` are accepted as explicit overrides
-(`cfg.recording.name`/`cfg.recording.assay`) because the historical
-convention they otherwise fall back to -- inferring both from `run_root`'s
-path shape -- raises on any run root that doesn't look like
-`<assay>/<Session>/<recording>/<pose dir>`, which a caller with the config in
-hand should never have to satisfy.
-"""
+"""One session's bout-flies gathered into the downstream analysis h5."""
 
 from __future__ import annotations
 
@@ -108,12 +52,7 @@ class BoutEntry:
 
 
 def exclusion_reason(outputs_path, stac_path) -> str | None:
-    """Why this bout-fly must not enter the dataset, or `None` if it may.
-
-    Three structural defects, in the order they are cheapest to detect. Each
-    means the solve produced nothing an analysis can use -- not that the fit
-    is merely poor, which is a QC number and not an exclusion.
-    """
+    """Why this bout-fly must not enter the dataset, or `None` if it may."""
     with h5py.File(str(outputs_path), "r") as f:
         qpos = f["qpos"][()]
         bridge_ok = f["bridge_ok"][()]
@@ -142,16 +81,7 @@ def _bucket_of(run_root: Path) -> str:
 
 
 def _fly_id_of(run_root: Path) -> str:
-    """`<Session>/<recording>` — the session-tagged form the bout tables use.
-
-    One rule, not a guess: a run root is `<assay>/<Session>/<recording>/<pose
-    dir>`, e.g. `.../courtship/Session0/2025_10_20_13_20_04/pose_maskfree_v2`,
-    so the recording is the parent and the session its grandparent. There is no
-    `fly_id` stored in `bouts.csv` to read instead — `read_bout_summary` takes
-    `session_tag` from its caller — so this is derived, and it raises rather
-    than returning a half-parsed identifier: a wrong `fly_id` is what makes a
-    pooled file impossible to split back apart by recording.
-    """
+    """`<Session>/<recording>` — the session-tagged form the bout tables use."""
     parts = Path(run_root).resolve().parts
     if len(parts) < 3:
         raise ValueError(
@@ -163,13 +93,7 @@ def _fly_id_of(run_root: Path) -> str:
 
 
 def _bout_frame_range(bout_dir: Path, n_frames: int) -> tuple[int, int]:
-    """The bout's ABSOLUTE frame range in the recording, from `mvq_meta.json`.
-
-    `(0, n_frames)` would describe the clip's own indexing, which is the same
-    for every bout and cannot locate anything. Falls back to that only when
-    the metadata is absent, and says so via the returned flag's absence --
-    a caller reading 0 for `start_frame` should treat it as unknown.
-    """
+    """The bout's ABSOLUTE frame range in the recording, from `mvq_meta.json`."""
     meta = bout_dir / "mvq_meta.json"
     if not meta.exists():
         return 0, int(n_frames)
@@ -184,34 +108,7 @@ def _bout_frame_range(bout_dir: Path, n_frames: int) -> tuple[int, int]:
 def collect_bout_entries(
     run_root, *, fly_id=None, bucket=None
 ) -> tuple[list[BoutEntry], list[dict]]:
-    """Every `bouts/bout_*/fly*` DIRECTORY under `run_root`, in bout order.
-
-    Iterating directories rather than `.../fly*/outputs.h5` is the fix for
-    the defect that made `excluded` blind: a bout-fly the IK refused outright
-    (bout 8's female on the reference run, 0.000 finite root keypoints) has a
-    directory but no `outputs.h5`, so globbing the file never visited it and
-    it could not be recorded as excluded -- only as absent, which a reader
-    cannot tell apart from "never attempted".
-
-    `fly_id`/`bucket` passed explicitly (from `cfg.recording.name`/
-    `cfg.recording.assay`) are used as-is; `None` falls back to inferring
-    both from `run_root`'s path shape (`_fly_id_of`/`_bucket_of`), unchanged
-    including `_fly_id_of`'s raise on an unconventional root. A caller that
-    holds the config should never have to satisfy that path convention.
-
-    Returns `(usable, excluded)`. `excluded` rows carry `key`, `fly`,
-    `fly_id`, `sex` and `reason`. `sex` and each usable entry's
-    `status`/`missing_fraction`/`fitted_px` come from
-    `tracking.qc.session.collect_rows` -- the SAME pass the session scorecard
-    reads -- rather than a second read of `sex.json`/`qc.json` here, so the
-    combined h5 and `session_qc.json` cannot disagree about a clip. Both
-    functions glob the identical `bouts/bout_*/fly*` directories, so every
-    row this function needs is present in that pass.
-
-    `start_frame`/`end_frame` are the bout's ABSOLUTE range in the original
-    recording (from the bout dir's `mvq_meta.json`, beside `sex.json` -- NOT
-    inside `fly<N>/`), not its own clip-local indexing.
-    """
+    """Every `bouts/bout_*/fly*` DIRECTORY under `run_root`, in bout order."""
     from tracking.qc.session import collect_rows
 
     run_root = Path(run_root)
@@ -274,16 +171,7 @@ def _pad_stack(arrays: list[np.ndarray], tmax: int) -> np.ndarray:
 
 
 def _fly_uid(fly_id: str, fly: int) -> str:
-    """`"<fly_id>/fly<N>"` -- the grouping key a train/val split must key on.
-
-    `fly_id` alone (a recording) is not enough: a courtship recording has two
-    flies, and a split that only knows the recording can put fly0's bout in
-    train and fly1's bout from the SAME recording in val without noticing
-    they are different animals -- fine. What it must not do is put fly0's
-    bout 19 in train and fly0's bout 26 in val, since that is one animal on
-    both sides. `fly_uid` is stable across bouts and gives a split exactly
-    the key to group on to prevent that leak.
-    """
+    """`"<fly_id>/fly<N>"` -- the grouping key a train/val split must key on."""
     return f"{fly_id}/fly{fly}"
 
 
@@ -322,11 +210,6 @@ def _write_info_group(info, entries: list[BoutEntry], excluded: list[dict]) -> N
         ),
     )
 
-    # A GROUP of parallel arrays, not the JSON-scalar `excluded` this
-    # replaces: a scalar can't be queried without a decode+json.loads round
-    # trip, and length-0 arrays (rather than an absent group) mean a reader
-    # never has to special-case "nothing was dropped" versus "this file
-    # predates the field".
     ex = info.create_group("excluded")
     ex.create_dataset("bout_keys", data=s(r["key"] for r in excluded))
     ex.create_dataset("flies", data=np.asarray([r["fly"] for r in excluded], np.int32))
@@ -383,10 +266,6 @@ def _combine(
             f"no usable bout-fly outputs to combine (excluded {len(excluded)}); "
             f"a combined file with no clips would assert an empty session as a result"
         )
-    # Each array comes from the file that actually holds it. `outputs.h5` has
-    # the pose and the two site arrays; `stac_ik.h5` has the solver's own
-    # `qvel`/`xpos`/`xquat` and the MODEL-unit `kp_data`. Nothing is
-    # duplicated between them, so neither can drift from the other.
     FROM_OUTPUTS = ("qpos", "site_xpos", "xpos_egocentric")
     FROM_STAC = ("qvel", "xpos", "xquat")
     per: dict[str, list[np.ndarray]] = {k: [] for k in (*FROM_OUTPUTS, *FROM_STAC)}
@@ -420,10 +299,6 @@ def _combine(
             for k, v in per.items():
                 f.create_dataset(k, data=_pad_stack(v, tmax))
         else:
-            # One group per clip, each at its OWN length -- the layout
-            # `ik_output_combined_mvq_v2.h5` uses and downstream analysis
-            # already reads. Group index is the clip's position in every
-            # `info/` array, so `info/sex[i]` describes `bout_%03d % i`.
             for i, (kp, key) in enumerate(zip(kp_flat, entries, strict=True)):
                 g = f.create_group(f"bout_{i:03d}")
                 g.create_dataset("kp_data", data=kp)
@@ -456,14 +331,7 @@ def _combine(
 def combine_session(
     run_root, *, anatomy, source_hz, git_sha, out_path, fly_id=None, bucket=None, padded=False
 ) -> dict[str, Any]:
-    """One session -> one combined h5. The default unit.
-
-    `fly_id`/`bucket` pass straight through to `collect_bout_entries`: give
-    them (from `cfg.recording.name`/`cfg.recording.assay`) when `run_root`
-    doesn't follow the `<assay>/<Session>/<recording>/<pose dir>` convention
-    `_fly_id_of`/`_bucket_of` otherwise infer from, and both remain optional
-    so existing conventional-path callers are unaffected.
-    """
+    """One session -> one combined h5. The default unit."""
     entries, excluded = collect_bout_entries(run_root, fly_id=fly_id, bucket=bucket)
     return _combine(
         entries,
@@ -480,11 +348,7 @@ def combine_session(
 def combine_many(
     run_roots, *, anatomy, source_hz, git_sha, out_path, padded=False
 ) -> dict[str, Any]:
-    """Several sessions pooled into one file. EXPLICIT, never the default.
-
-    Pooling mixes DLT calibration frames; `info/fly_ids` and `info/buckets`
-    are what let a consumer split them apart again.
-    """
+    """Several sessions pooled into one file. EXPLICIT, never the default."""
     entries: list[BoutEntry] = []
     excluded: list[dict] = []
     for root in run_roots:

@@ -1,57 +1,5 @@
 """Side by side: the real camera with keypoints, and the MuJoCo IK render from
 the SAME camera with the same keypoints.
-
-Every other check in this repo reduces the fit to a number. This one puts the
-posed body model beside the animal it was fitted to, from the animal's own
-camera, which is the only view in which "does the fit match the fly" is a
-question you can answer by looking (CLAUDE.md: a figure is how you notice a
-number matches for the wrong reason).
-
-`render_sidebyside` is the ONE implementation: both the pipeline stage
-(`pipeline.recording_stages.sidebyside_bout_fly`) and the thin CLI that
-replaced the script call it, so there are not two renders to keep in sync.
-
-**What this should show if the fit and the camera build are both right.** The
-rendered fly (right) has the SAME pose, orientation and apparent size as the
-real fly (left): same body axis, same wing positions, legs on the same side.
-The green markers sit ON the rendered body, and the white observed keypoints
-sit on the real fly. Left and right should look like the same animal
-photographed twice.
-
-**What each kind of failure looks like, so a wrong render is not read as a
-right one:**
-
-- A fly that is MIRRORED, rotated 90/180 degrees, or the wrong size = the
-  CAMERA build is wrong, not the fit. `camera_check_px` (returned, and
-  printed) measures the camera numerically rather than trusting the picture.
-- Apparent size drifting between cameras at different depths = the camera was
-  built as perspective rather than orthographic. The rig's calibration is
-  AFFINE; see `tracking.viz.mjcam`.
-- Green markers ON the rendered body but the body in a different POSE from the
-  real fly = the camera is right and the IK is wrong. This is the only failure
-  this figure is meant to find.
-- Green markers OFF the rendered body = the model->world bridge disagrees with
-  the render, i.e. the two panels are not in the same space.
-
-**Which frames get rendered.** `frames=None` (the pipeline default) samples
-`n_preview_frames` bout-relative indices evenly across the WHOLE bout, so a
-40-frame bout and a 4000-frame bout both get a representative preview from
-the SAME knob -- nobody has to know or type a per-bout frame count. An
-explicit `frames` list (the original script's `--frames`) is used exactly,
-clipped to the bout's own length. `sidebyside.mp4` stacks the sampled frames
-in order; `sidebyside_still.png` is the middle one of those actually
-rendered (some sampled frames are skipped -- see below -- so "the middle
-requested index" and "the middle rendered frame" can differ).
-
-A sampled frame is silently skipped, not fatal, when fewer than 4 of its
-fitted sites are finite: `umeyama` needs at least that many points to fit a
-similarity transform, and a bout can have frames where the IK's own root is
-NaN (the same "0 finite root keypoints" case `sidebyside_bout_fly` guards
-against for a whole bout-fly). One unusable frame among several sampled ones
-should not fail the whole render.
-
-Needs a GPU node and `MUJOCO_GL=egl` (set here, as the script did). Never run
-on a login node.
 """
 
 from __future__ import annotations
@@ -112,15 +60,7 @@ def _draw(img, uv, ok, colour, chains_idx, *, radius=3, thickness=1):
 
 
 def _sample_frames(n_qpos: int, frames, n_preview_frames: int) -> list[int]:
-    """Bout-relative frame indices to render -- see this module's docstring.
-
-    `frames`, when given, is used exactly (deduplicated, clipped to
-    `[0, n_qpos)`): this is the `--frames` flag the original standalone
-    script took, now a config knob (`configs/viz/default.yaml`). `None`
-    samples `n_preview_frames` indices evenly across `[0, n_qpos)` with
-    `np.linspace`, so the same knob gives a representative preview
-    regardless of the bout's own length.
-    """
+    """Bout-relative frame indices to render -- see this module's docstring."""
     if frames is not None:
         return sorted({int(t) for t in frames if 0 <= int(t) < n_qpos})
     if n_qpos <= 0:
@@ -150,18 +90,6 @@ def render_sidebyside(
 ) -> dict:
     """Render ONE bout-fly's side-by-side check to `video_path`/`still_path`,
     and stamp `pose_source_path` with `outputs.h5`'s own `pose_source` attr.
-
-    Reads, all from `fly_dir` and resolved by NAME (never a bare integer,
-    CLAUDE.md): `outputs.h5` (fitted `qpos`/`kp3d_mm`), `kp2d.npz`/`kp3d.npz`
-    (the observed 2D/3D this bout-fly was fitted to) and `stac_ik.h5`
-    (fitted marker `offsets`). `cameras=None` renders every camera in `rig`;
-    an explicit list renders exactly those, in that order.
-
-    The model -> world similarity is refit per FRAME via `umeyama`
-    (`kp3d_mm` IS the bridge applied to the fitted sites, so refitting over
-    the pair recovers the run's own bridge exactly rather than inventing a
-    second map) -- never reused across frames, because the bridge is itself
-    per-frame in `outputs.h5`.
     """
     fly_dir = Path(fly_dir)
     video_dir = Path(video_dir)
@@ -174,10 +102,6 @@ def render_sidebyside(
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     cap.release()
 
-    # Two models, deliberately. `anatomy.mj_model` carries the added marker
-    # sites and is what the marker positions must come from; the RENDER model
-    # is a plain compile of the same MJCF plus our camera. Sites add no DOFs,
-    # so `qpos` is interchangeable between them.
     model = _build_model(anatomy.model_xml, width, height)
     data = mujoco.MjData(model)
     if model.nq != anatomy.nq:
@@ -210,21 +134,12 @@ def render_sidebyside(
     kp2d = np.asarray(k2["kp2d"], np.float64)[:, p_cam][:, :, p_kp]
     conf2d = np.asarray(k2["conf"], np.float64)[:, p_cam][:, :, p_kp]
 
-    # The OBSERVED 3D keypoints the solve was fitted to, in WORLD units. From
-    # the stamped `kp3d.npz` plus this repo's own filter, never from
-    # `kp3d_filt.npz`: that file carries no `kp_names`, so its axis cannot be
-    # resolved by name (CLAUDE.md's keypoint-order trap).
     k3 = np.load(fly_dir / "kp3d.npz", allow_pickle=True)
     p3 = Order([str(x) for x in k3["kp_names"]]).permutation_to(kp_order)
     raw3d = np.asarray(k3["kp3d"], np.float64)[:, p3]
     conf3d = np.asarray(k3["conf3d"], np.float64)[:, p3]
     obs_world, _ = filter_kp3d(raw3d, conf3d, kp_order, DEFAULT_FILTER_CFG)
 
-    # The marker positions the bridge was fitted from: FK with the FITTED
-    # offsets applied. NOT `stac_ik.h5`'s `marker_sites` -- that is FK'd from
-    # the INITIAL marker model and sits ~2.4e-3 model units from the fitted
-    # one (`fitted_site_xpos_from_qpos`'s own docstring: a 1.5-2x reprojection
-    # regression once traced to exactly this file).
     with h5py.File(fly_dir / "stac_ik.h5", "r") as f:
         offsets = np.asarray(f["offsets"][()], np.float64)
     sites_all = fitted_site_xpos_from_qpos(anatomy, qpos, offsets)
@@ -294,16 +209,6 @@ def render_sidebyside(
                 _draw(real, kp2d[t, ci], vis, PALETTE["white"], chains_idx)
 
                 cx, cy = (int(np.median(rig_uv[:, 0])), int(np.median(rig_uv[:, 1])))
-                # A FIXED-SIZE window, shifted to stay inside the frame -- never
-                # clamped to it. Clamping shrank the crop whenever the fly came
-                # near an arena edge, so the size depended on where the fly was:
-                # sampled frames came out different sizes and the writer refused
-                # the movie with "All images in a movie should have same size".
-                # Measured 2026-09-15: 84 of Session1's sidebyside tasks, across
-                # 8 of 12 recordings. Session0's four hand-run bouts never hit an
-                # edge, which is why this shipped looking fine.
-                # The female works the walls, so she hits this far more than the
-                # male -- the hard fly is the one whose renders were lost.
                 bw, bh = min(2 * pad, width), min(2 * pad, height)
                 x0 = int(np.clip(cx - pad, 0, width - bw))
                 y0 = int(np.clip(cy - pad, 0, height - bh))
@@ -328,12 +233,6 @@ def render_sidebyside(
 
             if not rows:
                 continue
-            # A camera whose read() failed was `continue`d above, so this frame
-            # has fewer rows than its neighbours and would vstack SHORTER --
-            # the second, independent way to reach "All images in a movie
-            # should have same size", and one the fixed-size crop above cannot
-            # prevent. Skip such a frame, by name, rather than let a partial
-            # one set a size nothing else matches.
             if len(rows) != len(cams):
                 missing = len(cams) - len(rows)
                 print(
@@ -356,10 +255,6 @@ def render_sidebyside(
             f"fitted sites or an unreadable video frame -- nothing to render"
         )
 
-    # Both size hazards are handled above, so a mismatch here means a THIRD
-    # cause nobody has seen yet. Name it: imageio's own "All images in a movie
-    # should have same size" says nothing about which frames, which bout-fly,
-    # or what the sizes were, and that cost a full campaign pass to diagnose.
     shapes = {im.shape for im in frame_imgs}
     if len(shapes) > 1:
         raise ValueError(

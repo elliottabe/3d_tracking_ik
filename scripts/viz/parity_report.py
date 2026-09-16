@@ -1,53 +1,6 @@
 #!/usr/bin/env python3
 """Bout-28 parity figure: is the port's residual a real divergence, or run-to-run noise?
 
-WHAT THIS ANSWERS. The ported fine pass reproduces the reference run's kp3d to
-max abs ~0.036 world units, which fails an atol=1e-4 gate. The question that
-tolerance cannot answer is whether 0.036 is a DEFECT or simply how far this
-pipeline sits from itself: the mask-free pass is not bit-reproducible (~1 run
-in 4 diverges under XLA autotune). So every panel here plots TWO comparisons:
-
-    new vs old   (port      vs reference run)   -- the residual under test
-    new vs new   (port run1 vs port run2)       -- what the pipeline owes itself
-
-STATE THE EXPECTATION BEFORE READING THE FIGURE:
-  * If the residual is XLA nondeterminism, the two curves LIE ON TOP OF EACH
-    OTHER, the per-frame panel is FLAT across the bout, and the worst
-    keypoints are wings and tarsal tips (the noisiest landmarks).
-  * If it is a real divergence, new-vs-new sits near ZERO while new-vs-old does
-    not, and the per-frame panel GROWS with frame index as tracked window
-    placement accumulates drift.
-  * A residual concentrated on the HEAD (Antenna_Base / EyeL / EyeR), which is
-    nearly rigid and easy to localise, would mean something is wrong that
-    neither of the above explains -- treat that as a third outcome, not noise.
-
-WHAT THE MEASUREMENT SAID (2026-09-10, bout 28, first 30 frames). The
-new-vs-new floor came back EXACTLY zero -- bit-identical in-process and
-across processes -- so in this configuration the pass IS deterministic and
-the recorded "1 run in 4 diverges under XLA autotune" note does not apply.
-That makes the residual systematic, but it splits the two outcomes above:
-the per-frame panel is FLAT (not growing), the worst keypoints ARE the
-tarsal tips and wing veins, and the head is NOT among them. Magnitude
-settles it -- median 0.0030 units (0.3 um) reprojects to 0.018 px against
-this bout's own 0.81 px LOO floor, ~45x below it.
-
-A zero floor means the ratio panel cannot be a yardstick: any nonzero
-residual divides by zero. Read the MAGNITUDE against the LOO line, not the
-ratio. The pass/fail gate is in reprojected pixels (median < 0.1, p90 < 0.2,
-max < 0.5); this figure is the 3D-unit view of the same residual.
-
-Panels, left to right:
-  1. Per-keypoint median |diff| by NAME, both comparisons, sorted by the
-     new-vs-old median. Names, never indices -- an unlabelled keypoint axis is
-     how this project once measured a middle-left leg and called it a wing.
-  2. Per-frame median |diff| across the bout, both comparisons, with the
-     contact stretch (absolute frame 447800 = bout index 1494) marked. Flat vs
-     growing is the diagnostic.
-  3. Cumulative distribution of |diff| over all (frame, keypoint) pairs, both
-     comparisons, with the pipeline's own LOO reprojection floor drawn as a
-     vertical line, so how far the residual sits below the noise the pipeline
-     already carries is readable directly.
-
 Usage:
     python scripts/viz/parity_report.py \
         --arrays figures/2026-09-10-parity/bout28_parity_arrays.npz \
@@ -69,12 +22,6 @@ matplotlib.use("Agg")
 
 from matplotlib import pyplot as plt
 
-# The atol=1e-4 gate this figure was first drawn against was retired: in 0.1 mm
-# world units it demanded 10 nanometres on a 2.4 mm fly. The reference line is
-# now the pipeline's OWN leave-one-out reprojection floor on this bout (0.81 px,
-# female), converted into world units by this bout's recorded pair -- a median
-# 3D diff of 0.0029575 units reprojecting to 0.018 px, i.e. ~6.09 px per unit.
-# The conversion is a figure annotation, not a gate; the gate is in px.
 LOO_FLOOR_PX = 0.81
 PX_PER_UNIT = 0.018 / 0.0029575
 LOO_FLOOR_UNITS = LOO_FLOOR_PX / PX_PER_UNIT  # ~0.133 world units

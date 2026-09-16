@@ -1,30 +1,4 @@
-"""The per-frame model -> world similarity transform ("bridge").
-
-The IK solver's marker sites live in the body model's frame; the 3D keypoints
-they were fitted to live in world units. This module fits, per frame,
-
-    world_point = s * (R @ model_point) + t
-
-by Umeyama least squares. Everything downstream inherits these units and this
-notion of a missing frame, so a wrong transform here is wrong everywhere.
-
-Two hazards:
-
-- `ok=False` must NEVER be handed a substitute identity transform. An identity
-  places the model at the world origin at unit scale, which renders as a
-  plausible WRONG pose rather than as missing data. Consume `frame(i)` and
-  treat `None` as NaN.
-- Fit against re-FK'd sites
-  (`postprocess.kinematics.fitted_site_xpos_from_qpos`), NOT `stac_ik.h5`'s
-  `marker_sites`, which is FK'd from the INITIAL marker model rather than the
-  fitted `offsets` stored beside it -- 2.4e-3 model units apart. A per-frame
-  similarity fit tilts under systematically displaced source points: using it
-  cost 65-77% of a 1.5-2x reprojection regression on bout 28.
-
-The fit is ~0.8% sensitive in scale to which keypoint array it is given, and
-nothing downstream reveals which one was used -- hence `source` is a required,
-recorded field.
-"""
+"""The per-frame model -> world similarity transform ("bridge")."""
 
 from __future__ import annotations
 
@@ -37,12 +11,7 @@ __all__ = ["Bridges", "umeyama", "compute_bridges", "model_to_world", "world_to_
 
 @dataclass(frozen=True)
 class Bridges:
-    """Per-frame model -> world similarity transforms, `T` frames.
-
-    `s`/`R`/`t` are meaningful only where `ok[t]` is True; elsewhere they hold
-    placeholders. Use `frame(i)` rather than the raw arrays, so a missing frame
-    cannot be mistaken for a fitted one.
-    """
+    """Per-frame model -> world similarity transforms, `T` frames."""
 
     s: np.ndarray  # (T,)      model -> world scale
     R: np.ndarray  # (T, 3, 3)
@@ -51,23 +20,14 @@ class Bridges:
     source: str  # which keypoint array was fitted
 
     def frame(self, i: int) -> tuple[float, np.ndarray, np.ndarray] | None:
-        """`(s, R, t)` for frame `i`, or `None` if `ok[i]` is False.
-
-        The only representation downstream code should consume -- it cannot
-        drift from `ok`, unlike reading `s[i]`/`R[i]`/`t[i]` directly.
-        """
+        """`(s, R, t)` for frame `i`, or `None` if `ok[i]` is False."""
         if not self.ok[i]:
             return None
         return float(self.s[i]), np.array(self.R[i]), np.array(self.t[i])
 
 
 def umeyama(src: np.ndarray, dst: np.ndarray) -> tuple[float, np.ndarray, np.ndarray]:
-    """(s, R, t) minimising ||s R src + t - dst||^2.
-
-    `src` and `dst` are NOT interchangeable: swapping them solves the
-    inverse-direction transform, a materially different `(s, R, t)` rather
-    than its algebraic inverse re-expressed.
-    """
+    """(s, R, t) minimising ||s R src + t - dst||^2."""
     src = np.asarray(src, dtype=np.float64)
     dst = np.asarray(dst, dtype=np.float64)
     mu_s, mu_d = src.mean(0), dst.mean(0)

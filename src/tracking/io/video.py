@@ -1,36 +1,4 @@
-"""Forward-only threaded mp4 reading, and sync-plan slot mapping.
-
-This is the pipeline's single largest speed decision: `SlotReader` decodes
-each camera's mp4 with one dedicated thread, walking it FORWARD ONLY --
-`grab()` (decode, discard) through the frames a stride skips, `retrieve()`
-only at the stride hit that is wanted. After the one initial seek to the
-start slot, every mp4 frame is decoded at most once, ever.
-
-The alternative -- a kept-open capture re-seeked per call -- was measured at
-0.39 coarse frames/s (a ~22-hour ETA on one real recording), ~470% CPU and
-~0% GPU: CPU-bound on repeated keyframe-seek + GOP redecode, not GPU-bound in
-whatever forward pass the caller runs per frame. Do not go back to that
-design.
-
-`SlotReader` is therefore NOT a random-access reader: it is constructed with
-a stride and a start slot, and must be called with a strictly increasing
-slot sequence (`start_slot, start_slot + stride, start_slot + 2*stride, ...`)
-or it raises `ValueError`. For that sequence its frames are byte-identical
-to `read_window`'s -- the random-access reference reader below, which any
-single slot can be read from via a seek, at the cost of being unusable for a
-whole-recording pass.
-
-`preprocess`, when given, runs per camera INSIDE each decode thread (not on
-the consumer) -- moving per-camera preprocessing there instead of onto the
-single consumer thread that also has to issue every model forward was
-measured worth 1.87x; that placement must not move.
-
-Camera order and canonical-slot -> mp4-position mapping follow the same
-contract as the rest of `tracking.io`: cameras are named via `Order`, and
-`load_sync_plan` reads `sync_plan.json` (present <-> a recording had dropped
-frames on some camera) mapping canonical slots to per-camera mp4 positions;
-with no plan the mapping is positional.
-"""
+"""Forward-only threaded mp4 reading, and sync-plan slot mapping."""
 
 from __future__ import annotations
 
@@ -47,18 +15,7 @@ from tracking.io.names import Order
 
 
 def load_sync_plan(session_dir) -> dict[str, Any] | None:
-    """Read `<session_dir>/sync_plan.json`, or `None` if it does not exist.
-
-    Session dirs with no dropped frames on any camera have no sync plan; the
-    mapping from canonical slot to per-camera mp4 position is then purely
-    positional (`slot_positions` below).
-
-    The plan's shape (when present) is `{"cameras": {cam_name: {"positions":
-    [...] } | [...] , ...}}`: for canonical slot `s`, camera `cam_name`'s mp4
-    position is `positions[s]`, or the camera dropped that slot if `s` is
-    beyond the end of its `positions` list (or its position entry is
-    `null`).
-    """
+    """Read `<session_dir>/sync_plan.json`, or `None` if it does not exist."""
     path = os.path.join(str(session_dir), "sync_plan.json")
     if not os.path.exists(path):
         return None
@@ -81,16 +38,7 @@ def _cam_positions(plan: dict[str, Any] | None, camera: str) -> list | None:
 
 
 def slot_positions(plan: dict[str, Any] | None, camera: str, slots: np.ndarray) -> np.ndarray:
-    """Canonical slots -> this camera's mp4 frame positions.
-
-    Returns an `int64` array the same shape as `slots`; a slot the camera
-    dropped (only possible with a real plan) is `-1`, meaning "not present at
-    this slot" -- callers check that against the plan's own present mask,
-    they do not treat `-1` as a real frame index.
-
-    With `plan is None`, the mapping is positional: `positions[i] ==
-    slots[i]`.
-    """
+    """Canonical slots -> this camera's mp4 frame positions."""
     slots = np.asarray(slots)
     positions = _cam_positions(plan, camera)
     if positions is None:
@@ -125,37 +73,12 @@ def _slot_position(plan: dict[str, Any] | None, camera: str, slot: int) -> int:
 
 
 def _cap_get(cap, prop_id: int) -> float:
-    """`cap.get(prop_id)`, indirected through this module-level function.
-
-    `_CamStream._run` uses this ONLY for the post-retrieve frame-index drift
-    check (below) -- the one read a test needs to falsify to exercise that
-    check. `SlotReader` runs one decoder thread PER CAMERA, all concurrently
-    calling `.get()` on their own `cv2.VideoCapture` instances; a test that
-    wants to force a drift must NOT monkeypatch `cv2.VideoCapture.get` on the
-    class itself, because that patches every instance out from under every
-    other camera's thread at once, and unpatching at teardown races threads
-    that may still be leaked from an earlier, differently-timed run of the
-    same test. Patching this function instead only affects the single call
-    site below.
-    """
+    """`cap.get(prop_id)`, indirected through this module-level function."""
     return cap.get(prop_id)
 
 
 class _CamStream:
-    """One camera's forward-only decode thread.
-
-    Called with a strictly increasing sequence of canonical slots
-    `start_slot, start_slot + stride, ...`. Walks the mp4 FORWARD ONLY:
-    `cap.grab()` (decode, discard) through every frame the stride skips,
-    `cap.retrieve()` only at the wanted stride hit -- so each mp4 frame is
-    decoded at most once for the whole pass, after the one initial seek (to
-    `start_slot`).
-
-    A slot this camera's plan drops yields `frame=None, present=False`
-    without touching the decode cursor; the next present slot's absolute
-    target position naturally catches the cursor up across the gap via
-    `grab()`, not a seek.
-    """
+    """One camera's forward-only decode thread."""
 
     def __init__(
         self,
@@ -179,17 +102,6 @@ class _CamStream:
         self._thread.start()
         self._ready.wait()
         if self.error is not None:
-            # `_ready` is set right after opening the file, before the main
-            # decode loop -- so this thread can already be past its FIRST
-            # drift check (start_slot) by the time we get here, not just past
-            # the isOpened() check (both set `self.error` the same way, and
-            # `_run` exits on its own right after -- there is no lingering
-            # thread either way). This instance is never handed back to the
-            # caller (the exception propagates out of this constructor), so
-            # nobody else will ever call `close()` on it; calling it here
-            # makes the thread's `cap.release()` a synchronous, waited-for
-            # part of raising rather than an eventually-consistent side
-            # effect racing whatever runs next in the caller.
             self.close()
             raise self.error
 
@@ -234,15 +146,6 @@ class _CamStream:
                     if cursor is not None:
                         ok, fr = cap.retrieve()
                         if ok:
-                            # Checked on EVERY stride hit, not just the
-                            # first few: a drift that only appears later in
-                            # the decode (e.g. after a dropped/corrupt GOP)
-                            # would otherwise run silently past whatever
-                            # window this check used to stop at. A frame
-                            # from the wrong time consumed downstream as if
-                            # it were correct is exactly the confidently-
-                            # wrong data this repo's conventions exist to
-                            # catch.
                             actual = int(_cap_get(cap, cv2.CAP_PROP_POS_FRAMES)) - 1
                             if actual != pos_i:
                                 raise RuntimeError(
@@ -303,26 +206,6 @@ class SlotReader:
     """One `_CamStream` thread per camera, each decoding sequentially forward
     only (see `_CamStream`). NOT a random-access reader -- see module
     docstring.
-
-    `__call__(slot)` returns `(frames, present)` for one canonical slot, in
-    `cameras` order: `present` is `(C,)` bool, false for a camera whose slot
-    is past the end of its file (or dropped by the sync plan). With no
-    `preprocess`, `frames` is `(C, H, W, 3)` uint8 RGB. With `preprocess`
-    given, it is applied per camera INSIDE that camera's decode thread (not
-    on the consumer -- moving it there is worth 1.87x) and `frames` is the
-    `(C, ...)` stack of `preprocess(frame)`; an absent camera's row is
-    `preprocess(zeros)`, not zeros, computed once and cached.
-
-    Must be called with a strictly increasing slot sequence on the
-    `start_slot + k*stride` grid this reader was constructed with; anything
-    else raises `ValueError`.
-
-    Also usable as a context manager (`with SlotReader(...) as reader:`),
-    which calls `close()` on exit -- including when the body raises. Without
-    it, a consumer that raises mid-iteration and never calls `close()`
-    leaves every one of its `cameras`-many decoder threads alive
-    indefinitely; a leaked decoder thread per bout would exhaust the node
-    over a real session run.
     """
 
     def __init__(
@@ -387,9 +270,6 @@ class SlotReader:
             if self.preprocess is None:
                 rows[ci] = frame if pres else np.zeros((self.H, self.W, 3), np.uint8)
             else:
-                # An absent camera contributes preprocess(zeros), not zeros
-                # itself, so a missing camera's row still shape/dtype-matches
-                # the rest of the stack under whatever `preprocess` does.
                 if self._absent_pre is None:
                     self._absent_pre = self.preprocess(np.zeros((self.H, self.W, 3), np.uint8))
                 rows[ci] = pre if pres else self._absent_pre
@@ -419,9 +299,6 @@ def read_window(
     `cameras` order -- byte-identical to what `SlotReader` yields for the
     same slot when called in a strictly increasing sequence that includes
     it.
-
-    Not for a whole-recording pass (a seek + GOP redecode per call); see the
-    module docstring for why `SlotReader` exists.
     """
     import cv2
 

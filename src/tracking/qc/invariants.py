@@ -1,17 +1,4 @@
-"""Rigid invariants: quantities anatomy forbids from changing.
-
-This is the check that exposed the keypoint-order bug when jitter, spike rate,
-confidence and multi-view residual were ALL excellent on the mislabelled
-points. A collapsed keypoint pair is smoother than a real landmark, so every
-smoothness-shaped metric rated the broken version best in the table. A rigid
-segment's length cannot change; that is a claim about the animal, and no amount
-of smoothness satisfies it by accident.
-
-Every number here is reported with the invariant NAMED -- `T1L_FeTi--T1L_TiTa`,
-`EyeL--EyeR` -- never a bare index, and the CV is reported rather than the mean.
-A collapsed pair has a perfectly stable length of ~zero, which is an EXCELLENT
-CV; `collapsed` is the separate flag that catches it.
-"""
+"""Rigid invariants: quantities anatomy forbids from changing."""
 
 from __future__ import annotations
 
@@ -24,9 +11,6 @@ __all__ = ["EYE_PAIR", "COLLAPSE_FRAC", "segment_lengths", "invariant_report"]
 
 EYE_PAIR = ("EyeL", "EyeR")
 
-# 0.2 flags no real v1 segment: the shortest (T1R_TiTa--T1R_TaT1) is 0.380x
-# the median at rest, and a collapsed pair measures ~0. At 0.4 4 real
-# segments would be flagged. Measured 2026-09-12.
 COLLAPSE_FRAC = 0.2
 
 

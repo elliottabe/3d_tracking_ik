@@ -1,34 +1,4 @@
-"""Verify every external asset the pipeline needs, BEFORE any stage starts.
-
-`python -m tracking.run` is a ~40-minute GPU job before it reaches the stage
-that would actually open a missing checkpoint, and the exception it raises
-there is about orbax or a file handle, not about the asset -- Orbax's
-`StandardCheckpointer.restore` fails with a message about a missing
-`_CHECKPOINT_METADATA` file, which tells the reader nothing about which
-config key produced the path or which machine they are supposed to be on.
-This script resolves the SAME config a run would (Hydra `compose` over
-`configs/pipeline.yaml`, never a second hardcoded path table -- a checker
-with its own path table can pass while the pipeline fails) and reports, in
-two seconds, exactly which asset is missing and where it was expected.
-
-    python scripts/fetch_assets.py                # human-readable report
-    python scripts/fetch_assets.py --json          # machine-readable report
-    python scripts/fetch_assets.py --ckpt-dir DIR  # override paths.ckpt_dir
-
-Exit code is non-zero iff some asset with `required: True` is missing --
-`v2_3_model` (Task 10's, built per checkout by `scripts/build_v2_3_model.py`)
-and `hf_token` are reported but never fail the run, because `anatomy=v1` (the
-default and everything Phase C1 was gated on) needs neither.
-
-READ-ONLY, deliberately: this script only inspects the filesystem and the
-environment and never creates, copies, moves or deletes anything. An earlier
-draft carried an opt-in `--copy-from` that staged missing checkpoints from
-another machine; it was cut before merge (scope decision) -- nothing in this
-project has ever needed to copy assets between machines, and a checker that
-can also mutate the asset tree it is reporting on is a checker people
-hesitate to run. If copying between machines is ever genuinely needed, it
-belongs in a separate script with its own gate, not folded into this one.
-"""
+"""Verify every external asset the pipeline needs, BEFORE any stage starts."""
 
 from __future__ import annotations
 
@@ -46,13 +16,6 @@ import tracking.utils.path_utils  # noqa: F401 -- registers ${repo_root:} etc. b
 _CONFIG_DIR = str(Path(__file__).resolve().parents[1] / "configs")
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# The v2_3 body model has no config group of its own yet (Task 10 adds
-# `configs/anatomy/v2_3.yaml`). Its expected location is instead the fixed
-# convention `scripts/build_v2_3_model.py`/its predecessor already write to
-# -- a SIBLING checkout of `fruitfly_body_models`, not a path under this
-# repo's own `paths.ckpt_dir` -- so it is hardcoded here rather than read
-# off a config group that does not exist. Task 10 should replace this
-# constant with `cfg.anatomy.root`/`mjcf_path` once `anatomy=v2_3` exists.
 _V2_3_MODEL_PATH = (
     _REPO_ROOT.parent / "fruitfly_body_models" / "fruitfly_v2_3_ik" / "fruitfly_v2_3_ik.xml"
 )
@@ -120,9 +83,6 @@ def gather_assets(*, ckpt_dir: str | None) -> dict[str, Any]:
             ),
             present_hint="present (centerdetect.checkpoint, configs/centerdetect/default.yaml)",
         ),
-        # NOT fatal: `anatomy=v1` (the default) never reads this path, and a
-        # hard failure here would make every v1 run unrunnable on a fresh
-        # checkout that has not built v2_3 yet.
         "v2_3_model": _asset(
             name="v2_3_model",
             required=False,
@@ -141,11 +101,6 @@ def gather_assets(*, ckpt_dir: str | None) -> dict[str, Any]:
         ),
     }
 
-    # `HF_HOME`/`HF_TOKEN` are env vars, not Hydra config -- DINOv3
-    # (`tracking.detector.backbones.dinov3`, which MVQ's backbone loads via
-    # HuggingFace) reads them directly. Reported, never fatal here: many
-    # DINOv3 checkpoints are public and a token is only needed for a gated
-    # model or a cold HF cache.
     expected_hf_home = "/gscratch/portia/eabe/data/Johnson_lab/sam3"
     actual_hf_home = os.environ.get("HF_HOME")
     hf_home_ok = actual_hf_home == expected_hf_home
@@ -170,9 +125,6 @@ def gather_assets(*, ckpt_dir: str | None) -> dict[str, Any]:
         "name": "hf_token",
         "required": False,
         "status": "OK" if token_present else "MISSING",
-        # PRESENCE only -- never the value, never a prefix of it. Run logs
-        # are captured wholesale by SLURM and pasted into issues; printing
-        # even `token[:4]` leaks it into every one of them.
         "present": token_present,
         "path": None,
         "config_key": "$HF_TOKEN env var",

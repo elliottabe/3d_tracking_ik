@@ -1,36 +1,4 @@
-"""Tracked window placement: where each fly's crop is centred, over time.
-
-Each fly's window is centred on ITS OWN last KNOWN-GOOD 3D centroid, carried
-forward across misses; CenterDetect's peaks seed a window only for a fly with
-NO live track, and never move an already-tracked fly's window. Measured
-against every-frame CenterDetect clustering on the reference bout: the
-female's late jumps 88 -> 66, merged windows 441 -> 4, frames read
-0.930 -> 0.992, eye-spacing CV 33.9% -> 22.7%.
-
-`no_merge=True` is the default: two nearby flies keep separate,
-overlapping-if-need-be windows rather than one crop centred BETWEEN them,
-which is out of the training distribution (windows are always centred on ONE
-fly).
-
-ONE DISTANCE THRESHOLD, `merge_dist_units`, for BOTH jobs -- matching the
-source exactly (`coarse_track.py::plan_windows_tracked`'s docstring:
-"windows within this distance are the 'same fly' for two purposes"):
-
-  1. a CenterDetect centre within `merge_dist_units` of an already-tracked
-     fly is discarded as a fresh RE-DETECTION of that same fly, never a
-     second window;
-  2. when `no_merge=False`, two surviving windows within `merge_dist_units`
-     of each other are merged into one shared crop.
-
-A round 1 fix review caught an EARLIER version of this module using a
-second, smaller constant (`DUP_DIST_UNITS`) for job 1 only, reasoning that
-`merge_dist_units`'s default (30 units) was too coarse a "same fly" radius.
-That was wrong, and it was motivated by a broken test: a reacquisition
-candidate placed only 10 units from a live track while passing
-`merge_dist_units=30.0` is correctly discarded as the SAME fly, so the
-smaller constant was added to make it survive instead of fixing the test. Do
-not reintroduce a second constant here.
-"""
+"""Tracked window placement: where each fly's crop is centred, over time."""
 
 from __future__ import annotations
 
@@ -38,24 +6,10 @@ from typing import NamedTuple
 
 import numpy as np
 
-# How many consecutive frames a fly's track is carried with NO passing read
-# before it is treated as "never tracked" again (letting CenterDetect
-# re-seed a window there instead of that CD centre being discarded as a
-# duplicate of a track that is, in practice, dead).
 DEFAULT_MAX_REUSE_FRAMES = 8
 
-# How many frames BEHIND frame t a tracked window's centre may be. Frame t's
-# window is centred on the fly's last-known-good centroid as of frame
-# t - placement_lag, so frames t .. t+lag-1 can all be PLANNED (and batched
-# into one forward) before any of their own reads has come back -- k=1 is
-# the serial one-forward-per-frame limit; k=8 (10 ms at 800 fps) is inside
-# the +-1 mm window-centre jitter the window dataset trains with, so an
-# 8-frame-old centre is still a centred crop.
 DEFAULT_PLACEMENT_LAG = 8
 
-# Per-window provenance codes, parallel to `coarse.py`'s frame-level
-# `centre_source` (0/1/2) but per FLY: which kind of window a fly's read
-# came from this frame.
 WINDOW_SRC_TRACK = "track"
 WINDOW_SRC_CENTERDETECT = "centerdetect"
 WINDOW_SRC_REUSED = "reused"
@@ -65,12 +19,7 @@ WINDOW_SOURCE_NONE = -1  # this fly had no window of its own this frame
 
 
 def resolved_placement_lag(placement_lag) -> int:
-    """`placement_lag` as a positive int (`None` -> `DEFAULT_PLACEMENT_LAG`).
-
-    Refused by name for 0/negative: a lag of 0 would ask frame t's window to
-    be centred on frame t's own read, which does not exist yet; a negative
-    one would read the future.
-    """
+    """`placement_lag` as a positive int (`None` -> `DEFAULT_PLACEMENT_LAG`)."""
     lag = DEFAULT_PLACEMENT_LAG if placement_lag is None else int(placement_lag)
     if lag < 1:
         raise ValueError(
@@ -81,18 +30,7 @@ def resolved_placement_lag(placement_lag) -> int:
 
 
 class TrackedWindowPlan(NamedTuple):
-    """`plan_windows_tracked`'s return.
-
-    centres: (W,3) float32 -- one row per RESULTING window (<= n_flies +
-        len(cd_centres), and fewer still once merging has happened).
-    assignment: (F,) int64 -- the LOCAL window index (into `centres`) each
-        fly's OWN window is, or -1 if this fly has no own window this frame
-        (untracked, or expired).
-    source: (W,) list of str in `{WINDOW_SRC_TRACK, WINDOW_SRC_CENTERDETECT,
-        WINDOW_SRC_REUSED}`, one per resulting window.
-    was_tracked: (F,) bool -- whether each fly had a LIVE track BEFORE this
-        plan was built (i.e. before this frame's read could update it).
-    """
+    """`plan_windows_tracked`'s return."""
 
     centres: np.ndarray
     assignment: np.ndarray
@@ -229,12 +167,6 @@ def plan_windows_tracked(
 class TrackedPlacementState:
     """One pass's tracked-placement state: each fly's last KNOWN-GOOD 3D
     centroid and how many consecutive frames it has been carried since.
-
-    `pos` is updated only on a passing read, so it survives misses; `age`
-    counts the misses since. The caller owns the order: plan first (a
-    window must exist before the forward that says whether it passed), then
-    `note_read`/`note_miss` (or the batch convenience `update`) once that
-    frame's read outcome is known.
     """
 
     def __init__(
@@ -255,10 +187,6 @@ class TrackedPlacementState:
             ic = np.atleast_2d(np.asarray(init_centroid, np.float64))
             n = min(self.n_flies, ic.shape[0])
             self.pos[:n] = ic[:n]
-        # NOT carried across a resumed chunk boundary (only `pos` is, via
-        # `init_centroid`): a resume may therefore reuse one fly's position
-        # up to `max_reuse_frames` frames longer than a single-shot run
-        # would have -- at most one expiry's worth of slack (see coarse.py).
         self.age = np.zeros(self.n_flies, np.int64)
 
     def centroids(self) -> np.ndarray:
@@ -295,11 +223,6 @@ class TrackedPlacementState:
         """Batch convenience over `note_read`/`note_miss`: for each fly, a
         finite row in `centroids` is a passing read (`note_read`), a
         non-finite row is a miss (`note_miss`).
-
-        `t` is accepted for symmetry with a frame-indexed caller (and for a
-        possible future per-frame diagnostic) but is not otherwise used --
-        the age/position bookkeeping here depends only on which rows are
-        finite, never on `t` itself.
         """
         del t  # see docstring
         centroids = np.atleast_2d(np.asarray(centroids, np.float64))

@@ -1,25 +1,4 @@
-"""Recording discovery and per-recording bout ids for a SLURM campaign.
-
-Session1 has fourteen recordings and one config file; Session0 has one of
-each. `--recordings session0` already names one config group directly, but
-Session1 would otherwise need fourteen hand-made groups or fourteen
-hand-typed CLI invocations -- and even then, `--bout-ids` took ONE list
-shared by every recording, silently wrong the moment recordings differ (this
-task's brief: Session1's runnable recordings have 2..30 bouts each).
-
-This module is deliberately pure Python with no Hydra/`configs/` import: the
-two things it does -- glob a session directory for recordings that have a
-parseable bout summary, and refuse (or resolve) per-recording bout ids -- are
-both testable against a plain directory tree or a fake lookup callback,
-independent of which cluster or which real recording configs exist. The
-caller (`scripts/slurm/session_pipeline.sh`) is the only place that ever
-composes a real Hydra config; it supplies that as a callback
-(`session_dir_parent_of` / `bouts_csv_and_tag_of`) rather than this module
-rebuilding `<data_dir>/Video_recordings/.../<id>` itself, which would be a
-second construction of a path `configs/recording/*.yaml` already owns (the
-exact failure task 19 defect 1 was: a second construction that can disagree
-with the config's own interpolation).
-"""
+"""Recording discovery and per-recording bout ids for a SLURM campaign."""
 
 from __future__ import annotations
 
@@ -36,16 +15,7 @@ _DEFAULT_SUMMARY_NAME = "courtship_bout_summary.csv"
 def list_recordings_with_summary(
     session_dir_parent: Path, *, csv_name: str = _DEFAULT_SUMMARY_NAME
 ) -> tuple[list[str], list[tuple[str, str]]]:
-    """Every recording id directly under `session_dir_parent`, split by summary.
-
-    Included: `<id>/<csv_name>` exists and `read_bout_summary` parses it to
-    at least one bout. Two of Session1's fourteen recordings have no
-    `courtship_bout_summary.csv` at all (verified 2026-09-14) -- silently
-    dropping them from a glob would make "12 chains submitted" and "14
-    recordings exist" indistinguishable, exactly the discrepancy an operator
-    needs told. Skipped entries carry a reason (not just an id) so the
-    caller can print one named line per skip rather than a bare count.
-    """
+    """Every recording id directly under `session_dir_parent`, split by summary."""
     included: list[str] = []
     skipped: list[tuple[str, str]] = []
     for entry in sorted(p.name for p in session_dir_parent.iterdir() if p.is_dir()):
@@ -66,22 +36,7 @@ def expand_recordings(
     session_dir_parent_of: Callable[[str], Path],
     csv_name: str = _DEFAULT_SUMMARY_NAME,
 ) -> tuple[list[str], list[str]]:
-    """Each `--recordings` token -> concrete `group` / `group:id` tokens.
-
-    Three token shapes (this task's brief): a bare config-group name
-    (`session0`) and an explicit `group:id` both pass through unchanged --
-    an explicit id is composed later, once, by the caller, so this function
-    never needs to know that recording exists on disk. `group:*` GLOBS: every
-    directory under that group's session dir with a parseable bout summary
-    (`list_recordings_with_summary`) becomes one `group:id` token; anything
-    else is named in `skip_lines`, never dropped silently.
-
-    `session_dir_parent_of(group)` composes that group's own Hydra config
-    and returns `recording.session_dir`'s PARENT. Injecting it as a callback
-    keeps this function testable against a tmp_path directory tree with no
-    Hydra/`configs/` involved, while `session_pipeline.sh` remains the one
-    place that actually resolves the path.
-    """
+    """Each `--recordings` token -> concrete `group` / `group:id` tokens."""
     resolved: list[str] = []
     skip_lines: list[str] = []
     for token in tokens:
@@ -102,22 +57,7 @@ def resolve_bout_ids(
     explicit: Sequence[int] | None,
     bouts_csv_and_tag_of: Callable[[str], tuple[Path, str]],
 ) -> dict[str, list[int]]:
-    """Per-recording bout ids for `build_session_graph`, never one shared list.
-
-    SLURM needs each recording's array SIZE at submit time (`--array=0-N`),
-    so this cannot be deferred to the driver's own runtime
-    `_discover_bout_ids` -- and Session1's runnable recordings have 2..30
-    bouts each (this task's brief), so a single list sizes every array
-    wrong except by coincidence for exactly one recording.
-
-    `explicit` (the CLI's `--bout-ids`) is REFUSED for more than one
-    recording -- same shape as task 19's `--run-root` refusal, and for the
-    same reason: silently reusing one list for N>1 recordings is a worse
-    failure than making the operator submit them one at a time. With
-    `explicit` omitted, each recording's ids come from its own `bouts_csv`
-    via `read_bout_summary`'s `idx` values, NOT `range(n)` -- a curated
-    summary that has dropped a bout makes `idx` and row position disagree.
-    """
+    """Per-recording bout ids for `build_session_graph`, never one shared list."""
     if explicit is not None:
         if len(recordings) > 1:
             raise ValueError(

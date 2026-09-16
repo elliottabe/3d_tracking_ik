@@ -1,40 +1,4 @@
-"""Fit per-fly STAC marker offsets ONCE, and let every bout reuse them.
-
-Marker offsets are a per-INDIVIDUAL constant (like body scale): where this
-fly's landmarks sit relative to its own skeleton. They are fit on a
-stratified, non-consecutive sample of that fly's own high-confidence frames
-(`tracking.preprocess.offsets.select_offsets_sample`) and then written to
-`offsets_fly<f>.h5`; every later bout of the same fly loads that file rather
-than refitting -- refitting per bout would make the marker model a function
-of which bout happened to run first, the same class of defect that once let
-one arbitrary bout's body scale poison a whole recording by 38x (this
-pipeline's documented scale-from-one-bout defect).
-
-The offset solve is a direct `optax` loop; `root_optimization` and
-`pose_optimization` delegate their LM solves to `PerFrameSolver`, the same
-class the per-bout pose fit uses.
-
-**Units, in order -- the 38x failure's exact path** (`scaled_model_keypoints`
-is the one place this happens): `kp3d_units` (0.1 mm world units) is
-multiplied by the dimensionless body `scale` from `preprocess.scale` FIRST,
-giving model units; then by `anatomy.mocap_scale_factor` (`1` for v1, not
-necessarily so for every anatomy) SECOND. Reversing the order, or dropping
-either factor, silently fits the offsets to a differently-scaled skeleton with
-no error and no NaN.
-
-**The parity gate.** `fit_offsets_from_flat`, re-run on the reference run's
-OWN stored `kp_data`, reproduces `offsets_fly{0,1}.h5`'s `offsets` to
-`max|Δ| < 5e-4` model units on both flies -- about twice the worst measured
-floor (2.38e-4, on fly1; the male, not the female, is the noisy fly here, by
-10x). Nothing here is or should be bit-exact: the reference stores float32 and
-the solve runs on a GPU.
-
-ONE `PerFrameSolver` is built per fit and threaded through every iteration.
-The analyzed-problem cache keys on model STRUCTURE, not site positions, so the
-`set_site_pos` copy each outer iteration produces still hits it: the root solve
-(`T=1`, partial mask) and the pose solve (`T=n_frames`, full mask) compile once
-each. Rebuilding per call costs a compile per iteration.
-"""
+"""Fit per-fly STAC marker offsets ONCE, and let every bout reuse them."""
 
 from __future__ import annotations
 
@@ -130,24 +94,6 @@ def optimise_offsets(
     (0.005 in v1's config), which belongs to the (dropped) `ProjectedGradient`
     pose solver and is a different quantity (relative cost change) entirely.
 
-    `optimizer="sgd"` is the default and is what every parity gate is
-    calibrated against. `optimizer="adam"` exists
-    because SGD's fixed step is not scale-invariant and `m_loss`'s gradient
-    scales linearly with `M_REG_COEF`: measured, `M_REG_COEF` of 100 and 1000
-    DIVERGE under SGD while 0, 1 and 10 converge. Adam normalises by the
-    gradient's own running scale, so the usable range of `M_REG_COEF` no
-    longer depends on the step size. Switching optimizer CHANGES THE FITTED
-    OFFSETS and breaks parity -- opt-in for that reason, never a default.
-
-    `frozen` is an optional boolean mask over `params0`; True components are
-    held at their starting value. The UPDATE is masked, not the gradient: a
-    masked gradient still moves a frozen parameter once momentum carries
-    state from earlier steps, so zeroing the delta is the only form that
-    actually guarantees no movement under every optimizer.
-
-    Returns `(params, error)`: `params` the optimised point, `error` the
-    gradient norm that satisfied (or last failed) the stopping test.
-
     Raises:
         FloatingPointError: if the optimisation diverged. The check is not
             decoration -- the stopping test is `error > tol`, and `NaN > tol`
@@ -184,13 +130,6 @@ def optimise_offsets(
         i, _params, _state, error = carry
         return (i < max_iter) & (error > tol)
 
-    # One fused device loop, not `max_iter` dispatched steps. The semantics are
-    # unchanged -- `error` starts at inf so the first iteration always runs, and
-    # the test is on the PRE-update gradient, exactly as jaxopt's `OptaxSolver`
-    # does it -- but the whole loop now costs one host/device round trip instead
-    # of up to 2000. The fit calls this once per outer iteration, so a Python
-    # loop here was up to 12000 dispatches per fit, each one a launch for a few
-    # microseconds of arithmetic.
     params0 = jnp.asarray(params0)
     params = params0
     n_done, params, _state, error = jax.lax.while_loop(
@@ -239,10 +178,7 @@ def m_loss(
 
 
 def _root_dims(anatomy) -> int:
-    """4 for a slide root, 7 (translation + quaternion) otherwise.
-
-    A fixed root never reaches here -- the caller skips `root_optimization`
-    entirely in that case."""
+    """4 for a slide root, 7 (translation + quaternion) otherwise."""
     jt = anatomy.mj_model.jnt_type
     if len(jt) and int(jt[0]) == _SLIDE:
         return 4
@@ -260,13 +196,6 @@ def _root_free(anatomy) -> bool:
 def _orientation_indices(anatomy) -> tuple[int, int, int, int] | None:
     """`(rear, left, right, front)` KP_NAMES indices from
     `JAXLS_ORIENTATION_KEYPOINTS`, or `None` when that key is absent/empty.
-
-    v1's OWN config sets this (`rear: Scutellum, left: WingL_base, right:
-    WingR_base, front: Antenna_Base`), and the pose solve uses it: a per-frame
-    orientation warm-start from these four trunk keypoints, applied whenever
-    the root is a free joint. `front` maps to `-1` -- "no front
-    keypoint" -- only if the `front` sub-key is itself absent, which for v1
-    it is not.
     """
     model_cfg = anatomy.cfg.get("model", {}) if anatomy.cfg else {}
     spec = model_cfg.get("JAXLS_ORIENTATION_KEYPOINTS") or {}
@@ -281,13 +210,7 @@ def _orientation_indices(anatomy) -> tuple[int, int, int, int] | None:
 
 
 def _root_and_trunk(anatomy) -> tuple[int, np.ndarray]:
-    """`(root_kp_idx, trunk_kp_weights)`.
-
-    `root_kp_idx` is `-1` when `ROOT_OPTIMIZATION_KEYPOINT` is absent.
-    `trunk_kp_weights` is `(K*3,)`, `1.0` at every coordinate of a keypoint
-    named in `TRUNK_OPTIMIZATION_KEYPOINTS`; an empty mapping (v1's shipped
-    default) makes every entry `0.0`.
-    """
+    """`(root_kp_idx, trunk_kp_weights)`."""
     model_cfg = anatomy.cfg.get("model", {}) if anatomy.cfg else {}
     root_name = model_cfg.get("ROOT_OPTIMIZATION_KEYPOINT")
     root_kp_idx = anatomy.kp_order.index(root_name) if root_name else -1
@@ -302,17 +225,6 @@ def _solver_settings_from_cfg(solver_cfg) -> SolverSettings:
     """`SolverSettings` for the OFFSETS-fit stage, from `solver_cfg`'s
     `JAXLS_*` keys -- a DIFFERENT tuning from `SolverSettings()`'s own
     defaults, which are the per-bout stage's.
-
-    Measured against the reference `offsets_fly{0,1}.h5`'s own stored
-    config: `JAXLS_LAMBDA_INITIAL=1.0`, `JAXLS_COST_TOLERANCE=1e-10`,
-    `JAXLS_GRADIENT_TOLERANCE=1e-8`, `JAXLS_PARAMETER_TOLERANCE=1e-10`,
-    `N_ITER_Q=500` -- all different from `SolverSettings()`'s `5e-4` /
-    `1e-12` / `1e-14` / `1e-16` / `500`.
-
-    `lambda_min` is NOT one of `solver_cfg`'s keys: this stage needs jaxls'
-    own `TrustRegionConfig` default of `1e-5`, not `SolverSettings()`'s
-    `1e-8`. `1e-8` reproduced the reference to only `1.292e-2` on fly0, 25x
-    over the gate.
     """
     return SolverSettings(
         n_iter=int(solver_cfg.get("N_ITER_Q", 500)),
@@ -329,13 +241,7 @@ def _solver_settings_from_cfg(solver_cfg) -> SolverSettings:
 def root_optimization(
     anatomy, mjx_model, mjx_data, kp_frame, *, root_kp_idx, kp_weights, settings=None, solver=None
 ):
-    """Warm-start the root pose from ONE frame and a root-only mask.
-
-    Translation always; orientation only insofar as the LM solve moves it.
-    `kp_frame` is `(K*3,)`, always frame 0 of the sample. Two LM calls, both
-    sharing the caller's `solver`; `q0[:3]` is deliberately not re-seeded
-    between them, which the shared root-only mask makes immaterial.
-    """
+    """Warm-start the root pose from ONE frame and a root-only mask."""
     kp_frame = np.asarray(kp_frame, dtype=np.float64)
     root_dims = _root_dims(anatomy)
     qs_to_opt = np.zeros(int(anatomy.nq), dtype=bool)
@@ -393,20 +299,6 @@ def pose_optimization(
     and `JAXLS_ORIENTATION_KEYPOINTS`; skipping (2) leaves every frame's warm
     start at the tiled default quaternion, a materially worse LM start that
     measurably moves the fitted offsets.
-
-    The solve is unchunked: frames never couple here, so `JAXLS_CHUNK_SIZE`
-    (a GPU-memory bound) is set to 0.
-
-    `solver` is REUSED across the whole fit and should be passed by the
-    caller. Site positions and the frozen qpos are traced inputs, so a
-    `set_site_pos` between outer-loop calls is a data change, not a new
-    program -- the compiled solve is valid across every iteration. Building a
-    fresh solver here instead costs a full jaxls `.analyze()` and XLA compile
-    per iteration: measured 55-107 s each against 0.33 s for a reuse, which
-    was the whole of this fit's runtime. A `None` solver builds one, for
-    callers that only run a single pass.
-
-    Returns `(mjx_data, qpos (T,nq), marker_sites (T,K,3))`.
     """
     kp_data = np.asarray(kp_data, dtype=np.float64)
     t = int(kp_data.shape[0])
@@ -454,11 +346,6 @@ def offset_optimization(
 ):
     """Sample `n_sample_frames` frames, then minimise `m_loss` over the
     flattened site offsets via `optimise_offsets`.
-
-    The sample is reshuffled fresh every outer iteration from a fixed seed,
-    not carried over. Ends with `replace_qs` -- kinematics only, NOT
-    `forward`'s kinematics+com_pos; only `m_loss`'s internal FK needs the
-    latter.
     """
     t = int(kp_data.shape[0])
     n_sample_frames = min(int(n_sample_frames), t)
@@ -511,10 +398,6 @@ def fit_offsets_from_flat(anatomy, kp_flat, *, solver_cfg) -> OffsetsFit:
     reference run's own stored `USE_JAXLS`/`JAXLS_SMOOTH_WEIGHT`, both
     vestigial here) and they are ignored rather than rejected: this reads what
     it needs out of a larger config, it is not a complete schema.
-
-    The parity gate (`test_fitted_offsets_reproduce_the_reference_run`)
-    calls this function directly so it exercises the fit and nothing
-    upstream of it.
     """
     solver_cfg = plain_mapping(solver_cfg, what="solver_cfg", api="fit_offsets_from_flat")
     n_iters = int(solver_cfg["N_ITERS"])
@@ -526,11 +409,6 @@ def fit_offsets_from_flat(anatomy, kp_flat, *, solver_cfg) -> OffsetsFit:
     m_optimizer = str(solver_cfg.get("M_OPTIMIZER", "sgd"))
     m_lr = solver_cfg.get("M_LEARNING_RATE")
     settings = _solver_settings_from_cfg(solver_cfg)
-    # ONE solver for the whole fit. Its analyzed-problem cache keys on shape
-    # and model STRUCTURE, not on site positions, so the root solve (T=1,
-    # partial mask) and the pose solve (T=n_frames, full mask) compile once
-    # each and every later iteration reuses them. Rebuilding per call cost a
-    # compile per iteration and was this fit's entire runtime.
     solver = PerFrameSolver(settings)
 
     kp_flat = np.asarray(kp_flat, dtype=np.float64)

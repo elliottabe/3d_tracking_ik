@@ -1,9 +1,4 @@
-"""The Stage-B gate signature stamped into an mvq-lifted kp3d.npz.
-
-A short stable string a run compares against a bout's stored gate to decide
-whether the file is stale -- produced by a different checkpoint, a different
-existence threshold, or a different window-selection rule.
-"""
+"""The Stage-B gate signature stamped into an mvq-lifted kp3d.npz."""
 
 from __future__ import annotations
 
@@ -19,31 +14,6 @@ from tracking.detector.mvq.checkpoint import checkpoint_sha256, resolved_step
 def _identity_sha(checkpoint, step):
     """The checkpoint's own on-disk sha256 when it is a real, readable orbax
     checkpoint; a hash of the path string itself otherwise.
-
-    The fallback exists so `gate_string` stays a pure function of its
-    arguments and never requires a real checkpoint directory on disk just to
-    be called (a synthetic path in a unit test, say). A real `MVQRunner`
-    always has a loadable checkpoint by the time it calls `gates_string()`
-    (`load_mvq_model` already required it in `__init__`), so this branch is a
-    safety net for a path that was never a real checkpoint, not a silent
-    swallow of a real one going missing -- but it IS a weaker staleness
-    guarantee (a path hash cannot tell a retrained checkpoint from the one it
-    replaced), so a caller that hits it needs to be told: a plain
-    misconfiguration (wrong path, deleted metadata, a partially-copied
-    checkpoint directory) must not silently downgrade into an
-    indistinguishable gate string.
-
-    Both a `warnings.warn` (for test capture / a caller with `-W error`) AND
-    a plain stderr print fire on every call that falls back -- NOT once per
-    process. `warnings.warn` dedupes by (message, category, module, lineno)
-    under Python's default filters, so a batch driver that builds one
-    `MVQRunner` per bout against the same misconfigured checkpoint path would
-    warn on the first bout and fall silent on every bout after it, in the
-    same process, with each bout's log tailed separately -- materially the
-    same silent-weak-gate failure this fallback exists to surface, just
-    moved one bout down the batch. The stderr print (`_report_unrestored`'s
-    convention elsewhere in this package) has no dedup registry, so it is
-    what must fire every time.
     """
     try:
         return checkpoint_sha256(checkpoint, step)
@@ -70,17 +40,7 @@ def gate_string(
     no_merge=None,
     min_vis=None,
 ):
-    """The stable gate string for one `(checkpoint, step)` and its knobs.
-
-    `step="latest"` is refused by name (`resolved_step`): it names a
-    different step every time the training job saves, so a gate built from
-    it would compare equal to a kp3d.npz produced by different weights.
-
-    `placement`/`placement_lag`/`no_merge`/`min_vis` are mask-free
-    (coarse/fine-pass) window-placement knobs -- added to the signature ONLY
-    when `placement` is named, so a masked-route runner's gate string (which
-    never has a placement rule) is unaffected by their existence.
-    """
+    """The stable gate string for one `(checkpoint, step)` and its knobs."""
     step_r = resolved_step(step)
     g = {
         "checkpoint": os.path.abspath(str(checkpoint)),

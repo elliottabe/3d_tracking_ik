@@ -1,20 +1,4 @@
-"""One session's per-bout QC gathered into a scorecard.
-
-Two files with the same numbers: `session_qc.json` for machines,
-`session_qc.md` for reading. A scorecard nobody reads is what lets 42/160
-NaN-cost pairs into a published figure.
-
-A missing or unparseable per-bout `qc.json` becomes a ROW with a `status`, never
-an exception and never an absence. Dropping it makes a part-processed session
-indistinguishable from a complete one, and the reader counts rows.
-
-Sex is read from each bout's `sex.json`, never assumed from the fly index.
-`fly0 = female` is a convention this pipeline enforces; a future swap must
-relabel the column rather than silently mislabel it.
-
-Aggregates are split by sex. A pooled posture number hid a 46/160 female versus
-0/160 male split.
-"""
+"""One session's per-bout QC gathered into a scorecard."""
 
 from __future__ import annotations
 
@@ -84,10 +68,6 @@ def _row_from_qc(bout: str, fly: int, sex: str, qc: dict, status: str) -> Sessio
     return SessionRow(
         bout=bout,
         fly=fly,
-        # `sex` (from `sex.json`, read fresh by `_sex_for`) is authoritative: a
-        # canonicalisation swap rewrites `sex.json` but never a bout's already-written
-        # `qc.json`, so the baked-in `posture.sex` can go stale. It is a fallback only
-        # for the rare case the fresh read itself came back "unknown".
         sex=sex if sex != "unknown" else (pos.get("sex") or "unknown"),
         status=status,
         n_frames=pos.get("n_frames") or cov.get("n_frames"),
@@ -106,18 +86,6 @@ def _row_from_qc(bout: str, fly: int, sex: str, qc: dict, status: str) -> Sessio
     )
 
 
-# A bout-fly whose keypoints are mostly absent still SOLVES -- the IK fits
-# whatever frames exist -- and the fit is then meaningless while looking
-# ordinary. Measured on Session0: the female is 87.7% missing in bout 19 and
-# 92.1% in bout 26 (max_gap 395 of 395, and 718 of 748), yielding 15.85 px and
-# 12.96 px fits, against 8.7% missing and 2.91 px in bout 28. Every one of those
-# rows was labelled "ok" until 2026-09-14.
-#
-# 0.5 separates those populations with room to spare in both directions. It is a
-# LABEL, never a gate: the data is kept and reported, because a partly-tracked
-# fly is still the analyst's to judge -- and discarding it would also be the
-# wrong call for the case this exists to serve, where only one fly is tracked
-# and the other's absence must be visible rather than silently dropped.
 SPARSE_MISSING_FRACTION = 0.5
 
 
@@ -137,10 +105,6 @@ def collect_rows(run_root, *, excluded=()) -> list[SessionRow]:
             status = f"excluded:{drop[(bout, fly)]}"
         qc_path = fly_dir / "qc.json"
         if not qc_path.exists():
-            # NOT "ok;qc.json missing", which asserted ok and missing at once.
-            # This fly produced no IK solve; the OTHER fly in the same bout is
-            # unaffected and keeps its full row, so a male's song stays usable
-            # when the female was never tracked.
             reason = "not_fit:no qc.json (ik produced no solve)"
             rows.append(_blank_row(bout, fly, sex, _join_status(status, reason)))
             continue
@@ -162,11 +126,7 @@ def collect_rows(run_root, *, excluded=()) -> list[SessionRow]:
 
 
 def _join_status(base: str, note: str) -> str:
-    """`note` alone when nothing else is wrong, else both, worst-first.
-
-    `base` is "ok" unless the caller excluded this bout-fly. Emitting
-    "ok;<problem>" reads as a contradiction and is what this replaces.
-    """
+    """`note` alone when nothing else is wrong, else both, worst-first."""
     return note if base == "ok" else f"{base};{note}"
 
 
@@ -188,14 +148,6 @@ def render_markdown(rows: list[SessionRow]) -> str:
 
 def write_scorecard(run_root, rows, *, json_path, md_path) -> dict:
     """Write both files and return the aggregate report, split by sex."""
-    # `n_rows` counts bout-flies LOOKED AT; `n_scored` counts those with a
-    # number. They differ whenever a fly was not fit, and quoting a median
-    # beside a row count it was not computed from is how a cohort of 3
-    # measurements gets read as 4.
-    #
-    # The median is over `ok` rows ONLY. A row 90% missing still carries a
-    # ratio, and folding it in drags the cohort statistic toward a fit nobody
-    # would use -- while `n_sparse` keeps it visible rather than hidden.
     by_sex: dict[str, dict] = {}
     for row in rows:
         bucket = by_sex.setdefault(

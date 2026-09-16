@@ -1,17 +1,4 @@
-"""Recording specification: the typed description of one multi-camera session.
-
-A "recording" is one multi-camera video session of flies: where its videos
-and calibration live, how many animals are in it, and its frame rate. This
-module reads that description out of a config and refuses two ways it could
-silently corrupt everything downstream:
-
-- a missing or non-positive `fps`, which is the sole source of `source_hz`
-  stamped into the final analysis dataset;
-- a `cameras` list that is not in the calibration glob order, which would
-  otherwise permute every camera axis downstream without any error — one
-  camera's keypoints plotted onto another camera's image, which still looks
-  almost plausible.
-"""
+"""Recording specification: the typed description of one multi-camera session."""
 
 from __future__ import annotations
 

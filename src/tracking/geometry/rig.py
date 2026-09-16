@@ -1,17 +1,4 @@
-"""Calibrated multi-camera rig: DLT projection and triangulation, by name.
-
-NumPy DLT reprojection and triangulation -- no torch, no jax -- addressed by
-camera NAME rather than integer index.
-
-Calibration directory layout:
-  <calib_dir>/
-    Cam<id>.yaml   (one file per camera, OpenCV FileStorage YAML)
-  Each YAML has a 'projectionMatrix' node: a 3x4 matrix (rows=3, cols=4).
-
-The canonical camera order is `tracking.io.names.load_camera_order`'s glob
-order (`sorted(Cam*.yaml)`), so it is defined by the calibration directory
-and nothing else -- see the keypoint/camera order warning in CLAUDE.md.
-"""
+"""Calibrated multi-camera rig: DLT projection and triangulation, by name."""
 
 from __future__ import annotations
 
@@ -49,9 +36,6 @@ class CameraRig:
         self.cameras = cameras
         self._matrices_f64 = np.asarray(matrices_f64, dtype=np.float64)
 
-        # (C, 4, 3): each 3x4 matrix transposed to (4,3), float32 -- the
-        # layout the neural lifter consumes (p_h @ M gives the homogeneous
-        # image point).
         self._matrices_f32 = np.ascontiguousarray(
             self._matrices_f64.transpose(0, 2, 1).astype(np.float32)
         )

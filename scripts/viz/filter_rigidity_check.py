@@ -1,32 +1,6 @@
 #!/usr/bin/env python3
 """Does the keypoint filter help or hurt the rigid-bone invariant?
 
-WHAT THIS ANSWERS. A rigid skeletal segment's length is CONSTANT -- that is the
-invariant that caught this pipeline's keypoint-order bug when jitter, spike
-rate, confidence and multi-view residual were all excellent. The temporal
-filter (confidence mask -> bone-length reject -> spike removal -> PCHIP fill ->
-Savitzky-Golay) exists to clean distal leg keypoints. This asks whether the
-cleaned track is actually MORE rigid than the raw triangulation it replaced.
-
-STATE THE EXPECTATION BEFORE READING THE FIGURE.
-  * If the filter is doing its job, every bone's CV goes DOWN or stays flat
-    between raw and filtered, on both flies, and the bars in panel 1 lean left.
-  * If the filter's replacement values are worse than what they replaced, the
-    female's bars lean RIGHT while the male's stay put -- she is the fly with
-    something to replace (8601 confidence-masked keypoint-frames on bout 28 to
-    his 0, 33066 interpolated coordinate-values to his 162).
-  * Panel 2 is the discriminator. Split the filtered track by whether the
-    filter ALTERED each pair: if the damage is in the replacements, untouched
-    pairs sit at the raw CV and altered pairs sit far above it. If instead the
-    whole track degraded, both halves move together.
-  * A CV above WITHIN_BONE_CV_WARN_THRESH = 0.15 is the source's own "this bone
-    is not behaving rigidly" line, drawn in panels 1 and 2.
-
-WHY IT MATTERS. `bout_kp3d_paths` prefers kp3d_filt.npz, so body scale -- the
-quantity behind this pipeline's 38x defect -- is estimated from the filtered
-track. If filtering degrades rigidity, the scale is fit to the worse of the two
-available measurements.
-
 Usage:
     python scripts/viz/filter_rigidity_check.py \
         --bout <run_root>/bouts/bout_00028 \
@@ -161,9 +135,6 @@ def main() -> None:
     a, b = pairs[worst]
     ia, ib = order.index(a), order.index(b)
     dr, df = _len(raw, ia, ib), _len(filt, ia, ib)
-    # The WHOLE bout, not a window: the CV in the legend is a full-track number,
-    # and the excursions that produce it are not all in the first few hundred
-    # frames. A windowed plot under a full-track label is a figure that lies.
     ax.plot(dr, color=C_RAW, lw=0.7, label=f"raw (CV {_cv(dr):.3f})")
     ax.plot(df, color=C_FILT, lw=0.7, label=f"filtered (CV {_cv(df):.3f})")
     ax.set_xlabel(f"frame (all {len(dr)} of the bout)")

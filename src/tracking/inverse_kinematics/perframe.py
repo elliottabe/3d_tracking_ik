@@ -1,41 +1,4 @@
-"""Per-frame multi-start STAC IK -- Stage C's solver.
-
-Per frame:
-  1. warm start -- root xyz from `ROOT_OPTIMIZATION_KEYPOINT`, root
-     orientation from the four `JAXLS_ORIENTATION_KEYPOINTS`, hinges from the
-     model's `qpos0` (`warm_start`);
-  2. that "zero" start is solved (vmapped single-frame LM, `PerFrameSolver`);
-  3. the remaining starts are CHAINED from that solution -- the same pose with
-     the left, right or both wing pitches reset to the model's spring rest
-     (-57.3 deg), so they converge in few iterations (`chained_starts`);
-  4. candidates are ranked per frame by marker cost with a Viterbi switch
-     penalty on pose jumps, wing DOFs weighted `switch_wing_weight` extra, so
-     a basin flip costs more than ordinary leg motion (`viterbi_select`);
-  5. a second pass re-solves the six wing DOFs alone on the SELECTED pose
-     (`refine_wings`, on by default; -12.2% wing marker residual). Order
-     matters: the multi-start picks the wing-pitch BASIN and this polishes
-     WITHIN it, so refining before selection would pull every candidate toward
-     its own basin.
-
-Units: `kp3d_model` and `offsets` are MODEL units -- the caller has already
-applied the body scale. `qvel` is model units per second, with `dt` in
-seconds. Keypoints are addressed BY NAME throughout (`anatomy.kp_order`),
-qpos slots by joint name (`anatomy.names_qpos`).
-
-Two traps:
-
-- **`per_frame_cfg["dt"]` is REQUIRED and has no default.** `load_anatomy`
-  does not push the config's timestep onto the model, so the model carries its
-  XML value (0.0001) where the config says 0.00125 -- a silent 12.5x error in
-  every `qvel` that NaNs nothing and moves no residual.
-- **`MOCAP_SCALE_FACTOR` is not applied on this path**, though the offsets fit
-  (`offsets_fit.scaled_model_keypoints`) does apply it. On v1 it is 1, so the
-  two agree; `solve_bout` raises if it is not, rather than fitting offsets and
-  poses in two unit systems.
-
-`kp3d_model` must be `(T, K, 3)`; `solve_bout` refuses a 2-D array by shape,
-naming the reshape in the message.
-"""
+"""Per-frame multi-start STAC IK -- Stage C's solver."""
 
 from __future__ import annotations
 
@@ -93,21 +56,13 @@ _VALID_STARTS = ("wing_rest_left", "wing_rest_right", "wing_rest_both")
 
 
 def dof_mask(names_qpos: Sequence[str], patterns: Sequence[str]) -> np.ndarray:
-    """`(nq,)` bool: qpos slots whose JOINT NAME matches any glob in `patterns`.
-
-    `names_qpos` is per-qpos-SLOT (`align_joint_dims`), so a free joint
-    contributes its one name seven times -- matching `"free"` selects all
-    seven slots, which is what every caller here wants.
-    """
+    """`(nq,)` bool: qpos slots whose JOINT NAME matches any glob in `patterns`."""
     return np.array([any(fnmatch.fnmatch(n, p) for p in patterns) for n in names_qpos], dtype=bool)
 
 
 def wing_dof_weights(names_qpos: Sequence[str], wing_weight: float) -> np.ndarray:
     """`(nq,)` per-DOF multiplier for the Viterbi jump penalty: `wing_weight`
     on the wing DOFs, 1.0 everywhere else.
-
-    Without it a wing-pitch basin flip and an ordinary leg swing cost the same
-    per radian, and the switch penalty that has to distinguish them cannot.
     """
     w = np.ones(len(names_qpos), dtype=np.float64)
     w[dof_mask(names_qpos, WING_DOF_PATTERNS)] = float(wing_weight)
@@ -115,12 +70,7 @@ def wing_dof_weights(names_qpos: Sequence[str], wing_weight: float) -> np.ndarra
 
 
 def select_by_cost(costs: np.ndarray) -> np.ndarray:
-    """`(S, T)` per-candidate per-frame costs -> `(T,)` cheapest candidate.
-
-    NaN costs never win (an unsolved candidate must not be selected by being
-    cheaper than everything); a frame where every candidate is NaN gets index
-    0, the implicit `zero` start.
-    """
+    """`(S, T)` per-candidate per-frame costs -> `(T,)` cheapest candidate."""
     c = np.where(np.isfinite(costs), costs, np.inf)
     idx = np.argmin(c, axis=0)
     idx[~np.isfinite(c).any(axis=0)] = 0
@@ -134,22 +84,7 @@ def viterbi_select(
     switch_weight: float,
     dof_weights: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Temporally consistent candidate choice. `(T,)` candidate index.
-
-    Minimises `sum_t cost[c_t, t] + switch_weight * sum_t ||q_t(c_t) -
-    q_{t-1}(c_{t-1})||^2` over the `mask`ed DOFs, optionally weighted per DOF
-    (`wing_dof_weights`).
-
-    With `switch_weight <= 0` or `T == 1` this IS `select_by_cost`, which is
-    the configuration used to isolate the Viterbi term.
-
-    Why at all: for a fly whose two wing-pitch basins have near-equal marker
-    cost, a per-frame argmin flips between them on noise (measured: female
-    wing flat/edge-on alternating frame to frame, pitch jitter x2.4). A
-    genuine ~1 deg/frame motion costs ~3e-4 rad^2 * w; a 30 deg basin jump
-    costs ~0.27 rad^2 * w per DOF. Non-finite costs are +inf; non-finite
-    poses count as no jump (an unsolved frame keeps candidate 0 downstream).
-    """
+    """Temporally consistent candidate choice. `(T,)` candidate index."""
     costs = np.asarray(costs, dtype=np.float64)
     n_cand, n_frames = costs.shape
     if switch_weight <= 0 or n_frames == 1:
@@ -185,20 +120,6 @@ def frame_costs(
 ) -> np.ndarray:
     """`(T,)` marker cost per frame: `sum(((site - kp) * w)^2)` over the FINITE
     keypoint coordinates, via MuJoCo's CPU FK.
-
-    `q` `(T, nq)` model units, `kp` `(T, K*3)` model units (NaN allowed),
-    `kp_weights` `(K*3,)`. `mj_model.site_pos[site_idxs]` must already carry
-    the fitted marker offsets -- `solve_bout` sets them on its own copy.
-
-    This is the same residual the solver minimises, so the candidate ranking
-    and the solve agree by construction. Two NaN rules, in opposite
-    directions and both load-bearing:
-
-    - a NaN KEYPOINT contributes nothing (the female carries 8.6% confidence-
-      masked keypoints on the reference bout, so a propagated NaN would cost
-      the whole frame);
-    - a NaN QPOS returns NaN, never 0.0 -- an unsolved candidate scored 0.0
-      would be the cheapest one on every frame.
     """
     d = mujoco.MjData(mj_model)
     q = np.asarray(q, dtype=np.float64)
@@ -221,21 +142,7 @@ def frame_costs(
 def qvel_from_qpos(
     q: np.ndarray, dt: float, *, freejoint: bool = True, max_qvel: float = 20.0
 ) -> np.ndarray:
-    """`(T, nv)` velocities from `(T, nq)` qpos. `dt` in SECONDS.
-
-    Forward difference with the LAST frame repeated (so the final row is
-    zero); free-joint angular velocity as
-    the axis-angle of `conj(q_t) q_{t+1}` over `dt`, wrapped to `(-pi, pi]`;
-    joint velocities clipped to `+-max_qvel`. NaN frames propagate NaN.
-
-    The clip is `out[:, 6:]` -- JOINTS ONLY. Clipping the root too would cap
-    translation at 20 model units/s and silently flatten fast walking, and
-    would cap the body's angular velocity as well.
-
-    `dt` is `stac.mujoco.dt` (0.00125 s on the reference run). It is NOT
-    `mj_model.opt.timestep`, which `load_anatomy` leaves at the XML's 0.0001:
-    reading the model's would scale every velocity by 12.5x.
-    """
+    """`(T, nv)` velocities from `(T, nq)` qpos. `dt` in SECONDS."""
     q = np.asarray(q, np.float64)
     qp = np.concatenate([q, q[-1:]], axis=0)
     if not freejoint:
@@ -255,9 +162,6 @@ def qvel_from_qpos(
         ],
         axis=1,
     )
-    # An unsolved frame reaches here as an all-zero quaternion, whose norm is
-    # 0. The resulting NaN is the intended output for that row, so this
-    # silences the warning WITHOUT changing a value.
     with np.errstate(invalid="ignore", divide="ignore"):
         dq = dq / np.linalg.norm(dq, axis=1, keepdims=True)
         ang = 2.0 * np.arccos(np.clip(dq[:, 0], -1.0, 1.0))
@@ -271,17 +175,7 @@ def qvel_from_qpos(
 
 
 def warm_start(kp_flat: np.ndarray, kp_order, model_cfg, q_base: np.ndarray) -> np.ndarray:
-    """`(T, nq)` production warm start -- the batch solver's own start.
-
-    Hinges come from `q_base` (the model's `qpos0`, tiled); the root
-    translation from `ROOT_OPTIMIZATION_KEYPOINT`'s own keypoint; the root
-    orientation from the four `JAXLS_ORIENTATION_KEYPOINTS`
-    (`rear`/`left`/`right`/`front`) via
-    `solver.estimate_orientation_from_keypoints`.
-
-    `kp_flat` is `(T, K*3)` in MODEL units. Every keypoint is resolved BY NAME
-    through `kp_order`; the indices only ever exist inside this function.
-    """
+    """`(T, nq)` production warm start -- the batch solver's own start."""
     kp_order = as_order(kp_order)
     model_cfg = plain_mapping(model_cfg, what="model_cfg", api="warm_start")
     kp_flat = np.asarray(kp_flat, dtype=np.float64)
@@ -326,11 +220,6 @@ def chained_starts(
 ) -> dict[str, np.ndarray]:
     """Rest starts built FROM the zero-start solution: everything as solved,
     only the named wing pitch(es) reset to the model's spring rest.
-
-    Chaining (rather than re-warm-starting) is what makes the extra candidates
-    cheap -- they converge in a few iterations from an already-good body pose.
-    Known names: `wing_rest_left`, `wing_rest_right`, `wing_rest_both`;
-    `zero` is the implicit candidate and is not listed here.
     """
     names = list(names_qpos)
     i_left, i_right = names.index("wing_pitch_left"), names.index("wing_pitch_right")
@@ -355,17 +244,7 @@ def chained_starts(
 
 
 def solver_settings_from_cfg(per_frame_cfg) -> SolverSettings:
-    """`SolverSettings` from a `stac.per_frame` block.
-
-    Defaults are the reference run's own values, so an absent key is the
-    reference behaviour rather than a jaxls default. `batch` is NOT a
-    performance knob: sweeping it on 500 frames moved `max|dqpos|` by
-    2.795e-01 between 512 and {128, 64, 32} -- batching is supposed to be
-    inert grouping of independent frames and measurably is not (almost
-    certainly one frame landing in a different wing-pitch basin). Changing it
-    changes results, so it must not be tuned for speed without re-running the
-    parity gate.
-    """
+    """`SolverSettings` from a `stac.per_frame` block."""
     cfg = plain_mapping(per_frame_cfg, what="per_frame_cfg", api="solver_settings_from_cfg")
     return SolverSettings(
         n_iter=int(cfg.get("n_iter", 500)),
@@ -379,12 +258,7 @@ def solver_settings_from_cfg(per_frame_cfg) -> SolverSettings:
 
 
 def _cpu_model(anatomy, offsets: np.ndarray):
-    """A COPY of `anatomy.mj_model` carrying the fitted marker offsets.
-
-    A copy because `Anatomy` is frozen and shared (a module-scoped fixture, a
-    whole session's bouts): writing `site_pos` on it in place would silently
-    re-point every later caller's markers at this fly's offsets.
-    """
+    """A COPY of `anatomy.mj_model` carrying the fitted marker offsets."""
     mj = copy.deepcopy(anatomy.mj_model)
     mj.site_pos[np.asarray(anatomy.site_idxs)] = np.asarray(offsets, np.float64)
     return mj
@@ -409,47 +283,7 @@ def refine_wings(
     settings: SolverSettings | None = None,
     dof_patterns: Sequence[str] = WING_DOF_PATTERNS,
 ) -> np.ndarray:
-    """Re-solve ONLY the wing DOFs, each frame frozen at ITS OWN pose. `(T, nq)`.
-
-    The wings are the least constrained part of the fit: three near-collinear
-    keypoints per wing leave blade pitch at ~99.6% of the marker Jacobian's
-    null direction, so a wing can be wrong while every residual looks fine.
-    Measured on the reference male, 200 frames, refining the reference run's
-    own `qpos`:
-
-    | | wing marker residual | max body movement |
-    |---|---|---|
-    | baseline (the reference pose) | 4.234e-3 | -- |
-    | full-DOF re-solve | 4.194e-3 (-0.9%) | 3.1e-1 |
-    | **wings-only, frozen PER FRAME** | **3.977e-3 (-6.1%)** | **1.0e-7** |
-    | wings-only, frozen at ONE template | 3.284e-1 (**77x worse**) | 1.0e-7 |
-
-    That last row is the trap this function exists to avoid, and NEITHER
-    version raises: `PerFrameSolver.solve`'s `frozen_qpos` defaults to
-    `mjx_data.qpos` broadcast across frames, which is right for a first solve
-    and catastrophic for a refinement -- every frame gets frozen at one
-    template and the wings are fitted to compensate for a body in the wrong
-    place. `frozen_qpos=q[idx]` (per frame) is passed explicitly below.
-
-    Run this AFTER the Viterbi selection, never before: the multi-start exists
-    to choose the wing-pitch BASIN and the refine polishes WITHIN it, so
-    refining each candidate first would pull every one toward its own basin
-    and make the selection meaningless.
-
-    Do NOT tighten the tolerance for this pass. Tightening it 100x
-    (`cost 1e-14, gradient 1e-16, parameter 1e-18`) changed the result by
-    nothing at all: identical residual to seven digits, identical 45 median
-    iterations, identical wall clock. The solve already converges far inside
-    the shipped tolerances (p95 60 iterations, ZERO frames at the 500 cap),
-    so tolerance is not what limits wing accuracy.
-
-    `qpos` `(T, nq)` model units, NaN rows (unsolved frames) passed through
-    untouched; `kp3d_model` `(T, K, 3)` model units, NaN allowed. Only the
-    masked DOFs are written back -- the solver returns its raw variable values
-    for the masked-OFF slots (the root variable has no cost at all under a
-    wings-only mask and the box-limit cost still sees every hinge), so the
-    merge is what makes "moves nothing else" exact rather than approximate.
-    """
+    """Re-solve ONLY the wing DOFs, each frame frozen at ITS OWN pose. `(T, nq)`."""
     qpos = np.asarray(qpos, dtype=np.float64)
     kp3d_model = np.asarray(kp3d_model, dtype=np.float64)
     if kp3d_model.ndim != 3:
@@ -507,18 +341,7 @@ def refine_wings(
 
 @dataclass(frozen=True)
 class PerFrameResult:
-    """One bout-fly's per-frame solve, in the order `write_stac_h5` stores it.
-
-    `qvel` carries a known, deliberately-kept defect at gap edges -- see the
-    comment beside its computation in `solve_bout`.
-
-    `qpos` is the FINAL pose (refined when the wings-only pass ran);
-    `qpos_selected` is always the Viterbi-selected candidate pose, so the
-    refinement is auditable rather than invisible. Both are `(T, nq)` model
-    units with NaN rows for unsolved frames. `start_idx`/`iterations` are -1
-    on unsolved frames. `candidate_names[start_idx[t]]` names the chosen
-    start -- never report a bare candidate index.
-    """
+    """One bout-fly's per-frame solve, in the order `write_stac_h5` stores it."""
 
     qpos: np.ndarray
     qpos_selected: np.ndarray
@@ -546,25 +369,7 @@ def solve_bout(
     per_frame_cfg: Mapping[str, Any] | None = None,
     solve_mask: np.ndarray | None = None,
 ) -> PerFrameResult:
-    """Solve every frame of `kp3d_model` `(T, K, 3)` independently.
-
-    `kp3d_model` is in MODEL units -- the caller has already multiplied by the
-    body scale. `offsets` is `(K, 3)` model units, in `anatomy.kp_order` order
-    (`offsets_fit.load_offsets` checks that by name).
-
-    `per_frame_cfg` is the run's `stac.per_frame` block PLUS a `dt` key taken
-    from `stac.mujoco.dt` (seconds; the reference run's 0.00125). `dt` is
-    required and has no default -- see this module's docstring, correction 3.
-    Recognised keys: `starts`, `switch_weight`, `switch_wing_weight`,
-    `save_candidates`, `refine_wings`, `max_qvel`, `dt`, plus the LM tuning
-    `solver_settings_from_cfg` reads when `settings` is None.
-
-    Frames whose warm-start keypoints are not all finite -- or which
-    `solve_mask` excludes -- are NaN in every output, never zero.
-
-    Returns a `PerFrameResult`. `write_stac_h5` puts it on disk in the schema
-    the rest of the pipeline reads.
-    """
+    """Solve every frame of `kp3d_model` `(T, K, 3)` independently."""
     t_start = time.time()
     kp3d_model = np.asarray(kp3d_model, dtype=np.float64)
     if kp3d_model.ndim != 3 or kp3d_model.shape[-1] != 3:
@@ -602,10 +407,6 @@ def solve_bout(
             "per_frame_cfg={**cfg.stac.per_frame, 'dt': cfg.stac.mujoco.dt}."
         )
     dt = float(cfg["dt"])
-    # Presence alone does not catch the trap: `{"dt": 0.0001}` is the model's
-    # own `opt.timestep` and would sail through. Bound it by what a video frame
-    # interval can plausibly be -- 1e-4 s is 10 kHz, which no camera here runs
-    # at (the reference recording is 800 Hz, dt = 1.25e-3).
     if not 2e-4 <= dt <= 1.0:
         # `dt = 0` is a plausible unset-config value; formatting its rate
         # would raise ZeroDivisionError from inside this guard's own message.
@@ -621,11 +422,6 @@ def solve_bout(
     switch_weight = float(cfg.get("switch_weight", 0.0))
     switch_wing_weight = float(cfg.get("switch_wing_weight", 1.0))
     save_candidates = bool(cfg.get("save_candidates", True))
-    # ON by default: the wings are the least constrained part of the fit --
-    # three near-collinear keypoints per wing leave blade pitch at ~99.6% of
-    # the marker Jacobian's null direction -- and the pass measures -12.2% wing
-    # marker residual with non-wing DOFs unchanged. The reference-run test pins
-    # `refine_wings: False` explicitly rather than relying on this default.
     do_refine = bool(cfg.get("refine_wings", True))
     max_qvel = float(cfg.get("max_qvel", 20.0))
     settings = settings if settings is not None else solver_settings_from_cfg(cfg)
@@ -662,9 +458,6 @@ def solve_bout(
         solvable = solvable & np.asarray(solve_mask, bool)
     idx = np.flatnonzero(solvable)
     if idx.size == 0:
-        # `NotFit`, not `ValueError`: an untrackable fly is a data condition the
-        # campaign must survive, not a crash that should take the recording's
-        # other bouts down with it. See `conventions.NotFit`.
         raise NotFit(
             "solve_bout: no frame has finite root/orientation keypoints "
             f"({need_names}); every frame would be NaN"
@@ -718,9 +511,6 @@ def solve_bout(
 
     q_selected_full = np.full((n_frames, nq), np.nan)
     q_selected_full[idx] = q_sel
-    # `.copy()`, not an alias: with the refinement off these two fields would
-    # otherwise be the SAME array, so `result.qpos is result.qpos_selected` and
-    # any caller mutating one silently mutates the other.
     q_full = q_selected_full.copy()
     if do_refine:
         t0 = time.time()
@@ -736,9 +526,6 @@ def solve_bout(
         q_full[idx] = q_refined
         solve_seconds["refine_wings"] = round(time.time() - t0, 1)
 
-    # Output FK on the CPU: a jax.vmap of mjx kinematics over T frames spends
-    # ~128 s in XLA compilation for 1500 frames where MuJoCo's C kinematics
-    # does the same in ~0.1 s.
     d = mujoco.MjData(mj)
     xpos = np.full((n_frames, mj.nbody, 3), np.nan)
     xquat = np.full((n_frames, mj.nbody, 4), np.nan)
@@ -750,15 +537,6 @@ def solve_bout(
         xquat[t] = d.xquat
         msites[t] = d.site_xpos[site_idxs]
 
-    # KNOWN DEFECT, pinned by
-    # `test_qvel_before_a_gap_is_corrupted_by_the_nan_to_num`: `nan_to_num`
-    # turns an UNSOLVED row into zeros rather than removing it, and
-    # `qvel_from_qpos` is a forward difference, so the last SOLVED frame before
-    # a gap differences against that zero row. A root moving at +8.0 units/s
-    # reports -8.0 there, and the zero quaternion NaNs that frame's three gyro
-    # components. Only the frame before a gap, and only in `qvel`; `qpos` is
-    # untouched. `qvel` is a shipped field, so changing this turns the test red
-    # rather than silently altering a published array.
     qvel = qvel_from_qpos(
         np.nan_to_num(q_full), dt, freejoint=anatomy.has_freejoint, max_qvel=max_qvel
     )
@@ -814,19 +592,7 @@ def solve_bout(
 
 
 def write_stac_h5(path, result: PerFrameResult, *, anatomy, cfg) -> None:
-    """Write `result` as `stac_ik.h5`, atomically (`.tmp` then `os.replace`).
-
-    Schema: the eleven datasets `stac_mjx.io.save_data_to_h5` produces
-    (`config`, `kp_data`, `kp_names`, `marker_sites`, `names_qpos`,
-    `names_xpos`, `offsets`, `qpos`, `qvel`, `xpos`, `xquat`) plus
-    `ik_start_idx` / `ik_iterations`, `qpos_candidates` / `candidate_costs`
-    when the solve saved them, and `qpos_selected` when the wings-only pass
-    ran, so the refinement is auditable. Names are stored as `|S` so every axis
-    can be read back by NAME.
-
-    `config` is JSON -- valid YAML, so `OmegaConf.create(f["config"][()]
-    .decode())` reads it exactly as it reads the reference run's own.
-    """
+    """Write `result` as `stac_ik.h5`, atomically (`.tmp` then `os.replace`)."""
     cfg = plain_mapping(cfg, what="cfg", api="write_stac_h5")
     path = str(path)
     tmp = f"{path}.tmp"

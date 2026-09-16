@@ -1,23 +1,4 @@
-"""One bout-fly's `outputs.h5` and `fitted.npz`.
-
-`outputs.h5` is the per-bout-fly analysis artifact: the pose, the model-frame
-arrays derived from it, and the per-frame model -> world bridge. Everything in
-it is in MODEL units. `fitted.npz` is the one world-unit product, written
-because `viz/kpvideo.py`'s `fitted` source reads
-`fly<f>/fitted.npz` through `load_npz(...)['kp3d']` and projects it with
-`CameraRig.project`, which takes WORLD points.
-
-NO MESH. The visualisation path renders the posed body through MuJoCo's own
-renderer, which reads the model's mesh geoms and the committed .obj assets
-directly. A stored mesh array would be (T, ~10^4, 3) floats per bout-fly --
-the largest thing in the artifact, for no reader.
-
-A frame the bridge could not fit is NaN in `root_se3`, `scale` and
-`fitted_world`, and False in `bridge_ok`. It is never given a substitute
-identity transform: an identity places the model at the world origin at model
-scale, which is off by roughly the arena and reads as a teleport rather than as
-a gap.
-"""
+"""One bout-fly's `outputs.h5` and `fitted.npz`."""
 
 from __future__ import annotations
 
@@ -67,22 +48,7 @@ _NAME_KEYS = ("kp_names", "names_qpos", "names_xpos")
 
 @dataclass(frozen=True)
 class FlyOutputs:
-    """One bout-fly's derived arrays. MODEL units except `kp3d_mm`.
-
-    `root_se3` is `qpos[:, :7]` -- the free joint's own pose in the MODEL
-    frame, `[x, y, z, qw, qx, qy, qz]`. It is NOT the model->world bridge;
-    the bridge contributes only `scale` (its `s`) and `kp3d_mm` (its result).
-
-    `kp3d_mm` carries the FK'd marker sites in WORLD units (0.1 mm). The name
-    is the reference artifact's and is a known misnomer -- Global Constraints
-    keep it on disk for compatibility. Measured on bout 28 fly0: -0.23..240.53.
-
-    `site_xpos` and `xpos_egocentric` are `(T, n_keypoints, 3)` -- the K
-    MARKER sites only, in `kp_order`, NOT all `nsite` model sites (v1:
-    nsite=165, n_keypoints=50). The full site axis has no name: `kp_names`/
-    `order_sha` stamp a K-long axis, and writing all 165 would put an
-    unnameable axis in a file whose whole contract is name-addressability.
-    """
+    """One bout-fly's derived arrays. MODEL units except `kp3d_mm`."""
 
     qpos: np.ndarray
     root_se3: np.ndarray
@@ -95,11 +61,7 @@ class FlyOutputs:
 
 
 def read_stac_h5(path) -> dict[str, Any]:
-    """Every dataset of a `stac_ik.h5`, with `|S` name arrays decoded to `str`.
-
-    Attributes come back under `"attrs"`; the solver writes `ik_solver`,
-    `ik_candidates` and `ik_summary` there.
-    """
+    """Every dataset of a `stac_ik.h5`, with `|S` name arrays decoded to `str`."""
     out: dict[str, Any] = {}
     with h5py.File(str(path), "r") as f:
         for key in f.keys():
@@ -123,30 +85,14 @@ def build_fly_outputs(
     kp_scale: float,
     source: str = "kp3d_filt",
 ) -> FlyOutputs:
-    """Derive every `outputs.h5` array from one `stac_ik.h5` plus its keypoints.
-
-    `kp3d_world` and `conf3d` are the WORLD-unit keypoints the solve was fitted
-    to -- `BoutArtifact.kp3d`/`conf3d` values, or the filtered array. They are
-    what the bridge maps the model onto; `kp_scale` only seeds the bridge's
-    constant fallback and is the fly's `scale.json` `scale` value.
-    """
+    """Derive every `outputs.h5` array from one `stac_ik.h5` plus its keypoints."""
     qpos = np.asarray(stac["qpos"], np.float64)
     n = len(qpos)
 
-    # The bridge's model points are RE-FK'd here with the fitted offsets, and
-    # `stac["marker_sites"]` is deliberately not read: it is FK'd from the
-    # INITIAL marker model, 2.4e-3 model units from the fitted one. Fitting a
-    # per-frame similarity to systematically displaced points tilts every
-    # frame's transform -- on bout 28 that alone cost 3.249 px against 2.450
-    # (fly0) and 2.334 against 1.343 (fly1). Re-FK'ing reproduces both.
     marker_sites = fitted_site_xpos_from_qpos(
         anatomy, qpos, np.asarray(stac["offsets"], np.float64)
     )
 
-    # Subset to the K marker/keypoint sites, in kp_order, NOT all nsite=165
-    # model sites: `kp_names`/`order_sha` name a K-long axis, and an nsite-long
-    # axis would be unnamed by that stamp -- the one thing this file's order
-    # contract exists to prevent (v1: nsite=165, n_keypoints=50).
     site_xpos = site_xpos_from_qpos(anatomy, qpos)[:, anatomy.site_idxs, :]
     xpos, xquat = body_frames_from_qpos(anatomy, qpos)
     ego = egocentric_sites(site_xpos, xpos, xquat, anatomy=anatomy, body=THORAX_BODY)
@@ -159,10 +105,6 @@ def build_fly_outputs(
         source=source,
     )
 
-    # The free joint's own pose, model frame. A slice of qpos, not the bridge.
-    # Guarded rather than assumed: an anatomy with no free joint has no root
-    # SE3 to slice, and taking qpos[:, :7] anyway would silently return seven
-    # unrelated joint angles formatted as a pose.
     if not anatomy.has_freejoint:
         raise ValueError(
             f"anatomy {anatomy.name!r} has no free joint; qpos[:, :7] is not a "
@@ -199,12 +141,7 @@ def build_fly_outputs(
 
 
 def write_outputs_h5(path, out: FlyOutputs, *, anatomy, kp_order: Order) -> None:
-    """Write `outputs.h5` atomically (`.tmp` then `os.replace`).
-
-    `order_sha` is an ATTR and `kp_names` a dataset, mirroring `stac_ik.h5`;
-    a reader that finds neither must refuse the file rather than assume an
-    order.
-    """
+    """Write `outputs.h5` atomically (`.tmp` then `os.replace`)."""
     path = str(path)
     tmp = f"{path}.tmp"
     with h5py.File(tmp, "w") as f:
@@ -243,14 +180,7 @@ def write_outputs_h5(path, out: FlyOutputs, *, anatomy, kp_order: Order) -> None
 
 
 def write_fitted_npz(path, out: FlyOutputs, *, kp_order: Order) -> None:
-    """Write `fitted.npz`: the same array `outputs.h5` stores as `kp3d_mm`.
-
-    Two carriers, one array, because their consumers differ: `viz/kpvideo.py`
-    reads `fly<f>/fitted.npz` through `load_npz`, which requires the
-    `kp_names`/`order_sha` stamp that an h5 dataset has no mechanism for. The
-    array is named `kp3d` inside the npz because that is the key kpvideo reads.
-    Do not recompute it -- pass the same `FlyOutputs`.
-    """
+    """Write `fitted.npz`: the same array `outputs.h5` stores as `kp3d_mm`."""
     save_npz(
         path,
         arrays={"kp3d": np.asarray(out.kp3d_mm, np.float64)},

@@ -33,10 +33,6 @@ class CrossBlock(nnx.Module):
 
     def __call__(self, q, bank, bank_valid, q_chunk: int | None = 512, impl: str = "xla"):
         if self.self_attn:
-            # No key mask: every query attends every other query, so there is
-            # no such thing as an "invalid" key here -- passing None (instead
-            # of an all-True mask) lets flash_attention skip masking entirely
-            # (measured ~2x faster than a same-shape masked call).
             h = self.ns(q)
             q = q + self.sa(h, h, None, q_chunk, impl)
         q = q + self.ca(self.nq(q), self.nk(bank), bank_valid, q_chunk, impl)
@@ -45,12 +41,6 @@ class CrossBlock(nnx.Module):
 
 class Heads(nnx.Module):
     def __init__(self, D, *, rngs):
-        # The xyz kernel is small-scale, neither zero nor default. Zero (with
-        # the zero bias) makes xyz identically 0 for every query, forever, so
-        # the prompt can never reach the output. Default scale over-corrects:
-        # `refine_in`/`e_pass` are zero-init, so pass 2's query nearly equals
-        # pass 1's and the final xyz comes out ~2x pass 1's (~3x the ROI
-        # radius) -- right in sign, far too large for "near-identity".
         self.xyz = nnx.Linear(D, 3, rngs=rngs, kernel_init=nnx.initializers.normal(1e-3))
         self.conf = nnx.Linear(D, 1, rngs=rngs)
         self.exist = nnx.Linear(D, 1, rngs=rngs)
@@ -165,8 +155,7 @@ class QueryDecoder(nnx.Module):
 
 
 def gather_refine_context(xyz, M, t_local, cam_valid, grid_tokens, crops, patch, bands, crop):
-    """xyz (B,I,T,K,3) -> context (B,I,T,K, D + 3*patch^2 + 2*(2*bands+1)).
-    grid_tokens (B,T,C,g,g,D); crops (B,T,C,H,W,3) float."""
+    """xyz (B,I,T,K,3) -> context (B,I,T,K, D + 3*patch^2 + 2*(2*bands+1))."""
     from tracking.detector.mvq.geometry import project_local
 
     B, n_inst, T, K, _ = xyz.shape

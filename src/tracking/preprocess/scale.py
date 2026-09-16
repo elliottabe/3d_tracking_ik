@@ -1,45 +1,4 @@
-"""One body scale per fly per recording, and a guard that a wrong one raises.
-
-`scale` (model units per world unit) does DOUBLE DUTY: the world->model unit
-conversion AND the per-animal body-size fit. Nothing downstream checks either
-factor independently, so a badly wrong scale does not look wrong -- it looks
-like a slightly worse fit, because the marker offsets absorb it. This scale was
-once fit from ONE arbitrary bout-fly, and one bad bout-fly (whose trunk cloud
-was inflated by gap-filled frames) gave `0.000338` against a pooled `0.010994`
--- 38x too small, applied to every bout and both flies of that recording. Every
-residual and NaN check passed; it was caught by looking at a render.
-
-Two things follow, and this module is both:
-
-1. **Pool, never pick.** A body is one size for a whole recording, so the
-   spread across a fly's bouts (~20% with the old trunk-cloud estimator) is
-   estimator noise, not signal. `estimate_fly_scale` reads every bout of one
-   fly, pools them, and MAD-rejects outlier BOUTS (`robust_scale`).
-2. **Check the number against physics.** `assert_plausible_body_scale`
-   converts a candidate scale back into a body length in mm and raises if it is
-   not a plausible *D. melanogaster*. It runs on the path callers actually take
-   (`estimate_fly_scale` calls it before returning), because the 38x scale
-   reached a whole recording precisely by not passing through a guarded path.
-
-**Units: these are 0.1 mm world units, NOT millimetres.** `WORLD_UNITS_TO_MM`
-is that fact in code; there are artifacts named `kp3d_mm` that are off by 10x,
-so do not trust an `_mm` suffix, trust this constant.
-
-The default estimator is `rigid_segment`: the distance between two keypoints at
-the ends of ONE rigid bone is fixed no matter how the fly moves -- whole-body
-rotation and translation cancel, and so does every other joint's pose. Dividing
-the model's rest-pose length for that bone by the observed median length is a
-DIRECT measurement, with no `estimator` choice to make. The older `trunk`/`all`
-modes (`per_frame_scales`) fit a similarity transform to a cloud of trunk
-markers, which confounds body size with pose and with gap-filled frames -- the
-38x defect's mechanism.
-
-Announcements go to stderr, never `warnings.warn`, which dedupes per process
-and would show a batch operator the first offending bout and none of the rest.
-They carry this package's shared `[scale] <function>: ...` tag
-(`preprocess._conventions.announce`), so one grep finds every line the
-preprocess stages write.
-"""
+"""One body scale per fly per recording, and a guard that a wrong one raises."""
 
 from __future__ import annotations
 
@@ -79,41 +38,23 @@ __all__ = [
 ]
 
 
-# mm per raw triangulated ("world") unit. Three independent anchors on real
-# data agree: body length 22.65 world -> 2.265 mm (textbook D. melanogaster
-# 2.0-2.5); T1 femur 5.05 -> 0.505 mm (real ~0.5); T3 femur 6.96 -> 0.696 mm
-# (real ~0.7-0.8).
 WORLD_UNITS_TO_MM = 0.1
 
-# Plausibility band for the body length a candidate scale implies. Textbook
-# D. melanogaster is 2.0-2.5 mm; widened slightly to tolerate normal
-# individual and measurement spread without flagging good scales.
 BODY_LENGTH_MM_MIN = 2.0
 BODY_LENGTH_MM_MAX = 3.0
 
-# Head (antenna base) to abdomen tip: the same head-to-tail span the track-QC
-# "body length" approximates. Both names are present in every anatomy config's
-# KP_NAMES and as `tracking[...]` sites in every body model.
 BODY_LENGTH_REF_PAIR: tuple[str, str] = ("Antenna_Base", "Abd_tip")
 
 LEG_NAMES = ("T1L", "T1R", "T2L", "T2R", "T3L", "T3R")
 # Consecutive joints along one leg's kinematic chain, thorax to tarsus.
 LEG_JOINT_CHAIN = ("ThxCx", "Tro", "FeTi", "TiTa", "TaT1")
 
-# Thorax-plate pairs, NOT included by default. Measured on real data they
-# imply a scale ~10.2% LARGER than the leg-chain scale -- the model's trunk
-# proportions do not quite match the animal's. IK joint angles are determined
-# by the LEG chain, so the leg-only default matches what the solver solves.
 THORAX_PAIRS: tuple[tuple[str, str], ...] = (
     ("WingL_base", "WingR_base"),
     ("Scutellum", "WingL_base"),
     ("Scutellum", "WingR_base"),
 )
 
-# within_bone_cv above which a fly's rigid-segment scale is untrustworthy.
-# Measured over 4 bouts: male (good keypoints) 3.6-6.2%, scale stable
-# 0.01142-0.01178; female (known-bad keypoints) 20-50%, scale swinging
-# 0.0081-0.0130. 0.15 sits above the male ceiling, below the female floor.
 WITHIN_BONE_CV_WARN_THRESH = 0.15
 
 # The trunk markers the cloud-fit estimators use.
@@ -127,19 +68,11 @@ DEFAULT_TRUNK_KEYPOINTS: tuple[str, ...] = (
 
 _BOUT_DIR_RE = re.compile(r"^bout_(\d+)$")
 
-# The model's rest-pose tracking-site positions, per XML path. `estimate_fly_
-# scale` calls into this once per bout, and re-parsing the MJCF each time is
-# seconds of pure waste.
 _SITE_REST_CACHE: dict[str, dict[str, np.ndarray]] = {}
 
 
 def _announce(func: str, message: str) -> None:
-    """One line to stderr, tagged `[scale] <func>: ...`.
-
-    Format and the stderr-not-`warnings.warn` rule are
-    `tracking.preprocess._conventions.announce`'s, shared with every other
-    announcement in this package so one grep finds them all in a batch log.
-    """
+    """One line to stderr, tagged `[scale] <func>: ...`."""
     announce("scale", func, message)
 
 
@@ -164,14 +97,7 @@ def _tracking_site_rest(model_xml) -> dict[str, np.ndarray]:
 def implied_body_length_mm(
     scale: float, model_xml, *, ref_pair: tuple[str, str] = BODY_LENGTH_REF_PAIR
 ) -> float:
-    """Body length in mm implied by a candidate world->model `scale`.
-
-    The model's OWN rest-pose distance between `ref_pair`'s two tracking sites
-    is fixed and data-independent; dividing it by `scale` gives the body length
-    `scale` implies in world units, and `WORLD_UNITS_TO_MM` converts that to
-    mm. Returns `nan` for a non-finite or non-positive `scale` -- the caller
-    (`assert_plausible_body_scale`) decides whether that is an error.
-    """
+    """Body length in mm implied by a candidate world->model `scale`."""
     if not np.isfinite(scale) or scale <= 0:
         return float("nan")
     rest = _tracking_site_rest(model_xml)
@@ -188,12 +114,7 @@ def implied_body_length_mm(
 
 
 def assert_plausible_body_scale(scale: float, model_xml, *, context: str = "") -> float:
-    """Raise unless `scale` implies a plausible *D. melanogaster* body length.
-
-    A `ValueError`, never an announcement: a wrong body scale silently poisons
-    a whole recording (the 38x defect), and there is no safe way to continue
-    past one. Returns the implied body length in mm on success.
-    """
+    """Raise unless `scale` implies a plausible *D. melanogaster* body length."""
     mm = implied_body_length_mm(scale, model_xml)
     if not np.isfinite(mm) or not (BODY_LENGTH_MM_MIN <= mm <= BODY_LENGTH_MM_MAX):
         a, b = BODY_LENGTH_REF_PAIR
@@ -213,17 +134,7 @@ def assert_plausible_body_scale(scale: float, model_xml, *, context: str = "") -
 def rigid_segment_pairs(
     kp_order: Order | Sequence[str], *, include_thorax: bool = False
 ) -> list[tuple[str, str]]:
-    """Keypoint NAME pairs spanning one rigid skeletal segment each.
-
-    Consecutive joints along each leg's chain (`LEG_JOINT_CHAIN`), restricted
-    to pairs whose BOTH names are in `kp_order`. A pair with an absent name is
-    dropped silently: the real v1 model has no `ThxCx` tracking site for the
-    T2/T3 legs, which is anatomy, not a config error. Names, never indices --
-    the two keypoint index spaces in this pipeline disagree.
-
-    `include_thorax=True` adds `THORAX_PAIRS`; off by default because they
-    imply a ~10% larger scale than the leg chain the IK actually solves.
-    """
+    """Keypoint NAME pairs spanning one rigid skeletal segment each."""
     names = set(as_order(kp_order).names)
     pairs: list[tuple[str, str]] = []
     for leg in LEG_NAMES:
@@ -248,13 +159,7 @@ def _check_fits(kp3d: np.ndarray, order: Order, *, what: str) -> None:
 def _segment_pair_measurements(
     kp3d, kp_order: Order | Sequence[str], model_xml, *, include_thorax: bool = False
 ) -> list[tuple[tuple[str, str], np.ndarray, float]]:
-    """`[((name_a, name_b), observed distances, model rest distance), ...]`.
-
-    One entry per usable rigid pair: both names present in `kp_order` AND as
-    model tracking sites, with at least one frame where both keypoints are
-    finite. Frames with a missing marker are dropped for THAT pair only --
-    an absent marker on one leg must not erase the other five legs.
-    """
+    """`[((name_a, name_b), observed distances, model rest distance), ...]`."""
     order = as_order(kp_order)
     pairs = rigid_segment_pairs(order, include_thorax=include_thorax)
     if not pairs:
@@ -266,9 +171,6 @@ def _segment_pair_measurements(
     positions = np.asarray(kp3d, dtype=np.float64)
     _check_fits(positions, order, what="rigid segment measurement")
     rest = _tracking_site_rest(model_xml)
-    # The single shared "which markers are real" rule (tracking.preprocess.gaps),
-    # not a second copy of it: a relaxed copy here and a strict one there is how
-    # the two silently diverge.
     valid = marker_validity_mask(positions)  # (T, K)
 
     measurements: list[tuple[tuple[str, str], np.ndarray, float]] = []
@@ -296,27 +198,7 @@ def _segment_pair_measurements(
 def segment_scale_diagnostics(
     kp3d, kp_order: Order | Sequence[str], model_xml, *, include_thorax: bool = False
 ) -> dict:
-    """Rigid-segment scale for ONE bout-fly, with the physics checks on it.
-
-    A rigid skeleton must have two independent properties, and a keypoint set
-    that breaks either is not measuring anatomy:
-
-    1. RIGIDITY -- one bone's length cannot change across frames.
-       `within_bone_cv` is the mean over pairs of (std / mean of that pair's
-       observed distance). High = jittery keypoints.
-    2. AGREEMENT -- different bones must imply the same body. `across_bone_cv`
-       is std / mean over the per-pair implied scales. High = internally
-       inconsistent keypoints (one limb systematically wrong) even when each
-       bone is perfectly rigid.
-
-    They move independently: per-frame jitter raises the first and not the
-    second (its across-frame median is unbiased); a wrong bone length raises
-    the second and not the first. See `WITHIN_BONE_CV_WARN_THRESH` for the
-    measured male-vs-female separation.
-
-    Returns `{"scale", "per_pair_scale", "within_bone_cv", "across_bone_cv",
-    "n_pairs_used"}`.
-    """
+    """Rigid-segment scale for ONE bout-fly, with the physics checks on it."""
     measurements = _segment_pair_measurements(
         kp3d, kp_order, model_xml, include_thorax=include_thorax
     )
@@ -350,26 +232,14 @@ def segment_scale_diagnostics(
 def per_bout_segment_scale(
     kp3d, kp_order: Order | Sequence[str], model_xml, *, include_thorax: bool = False
 ) -> np.ndarray:
-    """`(n_pairs,)` implied body scales for ONE bout-fly, one per rigid segment.
-
-    For each usable pair: the model's rest-pose distance divided by the
-    median-over-frames observed distance. Pose-invariant, and there is no
-    `estimator` argument -- a rigid segment's length is measured, not fit.
-    """
+    """`(n_pairs,)` implied body scales for ONE bout-fly, one per rigid segment."""
     return segment_scale_diagnostics(kp3d, kp_order, model_xml, include_thorax=include_thorax)[
         "per_pair_scale"
     ]
 
 
 def _umeyama_scale_per_frame(positions: np.ndarray, ref_centered: np.ndarray) -> np.ndarray:
-    """`(F,)` Umeyama least-squares similarity scale, one per frame.
-
-    `s = trace(D S) / sum |p_centered|^2` where `U D V^T = svd(ref^T data)` and
-    `S` corrects a reflection (Umeyama 1991). Provably <= the norm ratio
-    `|ref| / |data|` (von Neumann), so it never over-scales when the shapes do
-    not match. There is no Huber-IRLS reweighting: the only caller
-    (`per_frame_scales`) asks for `robust="none"`.
-    """
+    """`(F,)` Umeyama least-squares similarity scale, one per frame."""
     centered = positions - positions.mean(axis=1, keepdims=True)  # (F, n, 3)
     h = np.einsum("ni,fnj->fij", ref_centered, centered)  # (F, 3, 3) = ref^T data
     _u, singular, _vt = np.linalg.svd(h)
@@ -388,18 +258,7 @@ def per_frame_scales(
     trunk_names: Sequence[str] | None = None,
     estimator: str = "umeyama",
 ) -> np.ndarray:
-    """`(F,)` per-frame scale estimates for ONE bout-fly, from a marker cloud.
-
-    The legacy estimator: it FITS a similarity transform between the observed
-    trunk markers and the model's rest trunk, so it confounds body size with
-    pose and with gap-filled frames -- which is how the 38x defect happened.
-    `per_bout_segment_scale` is the default for new work; this stays for the
-    `trunk`/`all` modes and for A/B against them.
-
-    Frames where any selected marker is missing are dropped (the shared rule,
-    `tracking.preprocess.gaps.finite_frame_mask`), so the returned length is
-    the number of USABLE frames, not the number of frames in.
-    """
+    """`(F,)` per-frame scale estimates for ONE bout-fly, from a marker cloud."""
     order = as_order(kp_order)
     names = list(trunk_names) if trunk_names else list(DEFAULT_TRUNK_KEYPOINTS)
     rest = _tracking_site_rest(model_xml)
@@ -432,13 +291,7 @@ def per_frame_scales(
 
 
 def warn_if_estimator_ignored(estimator: str, *, caller: str = "estimate_fly_scale") -> None:
-    """Announce that a non-default `estimator` is about to be ignored.
-
-    `scale_keypoints='rigid_segment'` measures a bone directly, so there is
-    nothing for an estimator choice to fit. An operator who set
-    `scaling.estimator` and got the default anyway has to be told -- every
-    time, hence stderr.
-    """
+    """Announce that a non-default `estimator` is about to be ignored."""
     if estimator != "umeyama":
         _announce(
             caller,
@@ -449,61 +302,7 @@ def warn_if_estimator_ignored(estimator: str, *, caller: str = "estimate_fly_sca
 
 
 def robust_scale(per_bout: Mapping, *, mad_k: float = 3.0) -> dict:
-    """Pool one fly's per-bout scale samples and reject outlier BOUTS.
-
-    `per_bout` maps a bout index to that bout's scale samples (per-pair implied
-    scales for `rigid_segment`, per-frame scales for the cloud fit). All
-    samples are pooled and their median taken; a bout whose OWN median deviates
-    from that pooled median by more than `mad_k * MAD` (the MAD taken over the
-    per-bout medians) is flagged; the final scale re-pools the samples of the
-    bouts that survive. Deterministic -- no randomness anywhere.
-
-    KNOWN DEFECT, not yet fixed because it is a numerics change (see the "two
-    centres" note below): the MAD is taken about the median OF THE PER-BOUT
-    MEDIANS, but the
-    deviation is measured from the SAMPLE-WEIGHTED pooled median. The two
-    agree only when every bout contributes a similar number of samples, which
-    is exactly what `rigid_segment` does (every bout contributes `n_pairs`,
-    normally 20, whatever its length). In a per-frame-shaped mode
-    (`scale_keypoints='trunk'/'all'`, where a 10000-frame bout outvotes three
-    100-frame ones) one huge bad bout drags the pooled median onto itself, and
-    the GOOD bouts are then the ones flagged: a 10000-frame bout at 0.000338
-    against three good ones returns 0.000338 -- the literal historical defect
-    value -- with `outlier_bouts` naming the three good bouts.
-    `assert_plausible_body_scale` on the `estimate_fly_scale` path catches that
-    particular number, but a backstop is not a licence, and this function is
-    public. DEFERRED BY RULING, not forgotten: measuring the deviation from
-    `med_of_medians` is not parity-neutral in the default mode -- it flips the
-    reference male's bout 28 (the bout that recording's own scale.json was
-    computed from, and his best by rigidity, `within_bone_cv` 0.035) from
-    2.85*MAD to 3.38*MAD against the 3.0 threshold and moves his pooled scale
-    0.011484165245342768 -> 0.011374415970510204 -- and taking the MAD about
-    `pooled_median` instead does not fix the pathological case at all, since
-    the huge bout then defines the dispersion as well as the centre. A real fix
-    is therefore a consistent centre AND a re-tuned `mad_k` (3.0 is calibrated
-    against the inconsistent version) together, evaluated against Plan C's
-    end-to-end gate -- half of it is worse than neither half. See
-    `test_robust_scale_should_not_let_one_huge_bout_define_the_centre`, which
-    pins the target behaviour as xfail-strict so the decision cannot be made
-    silently.
-
-    Two edge cases, both announced rather than silent:
-
-    * Zero MAD (every bout's median identical to float precision) leaves the
-      gate open by construction, `mad_k * 0 == 0`. Real bouts of one fly spread
-      ~1%, so this is a synthetic-data case; the pooled MEDIAN still protects
-      the scale from a bad bout's samples, which a mean would not.
-    * Every bout flagged -- near-zero genuine spread lets float noise alone
-      cross the threshold. Falling back to pooling all bouts unfiltered is
-      right, but a caller relying on outlier rejection must know it did not
-      happen this time.
-
-    Returns `{"scale", "n_bouts", "n_samples", "per_bout_median",
-    "outlier_bouts", "spread_pct", "scale_cv_across_bouts"}`. `n_samples` is
-    deliberately not called `n_frames`: for `rigid_segment` the samples are
-    per-PAIR (~20 per bout), and calling them `n_frames` has misled readers
-    before.
-    """
+    """Pool one fly's per-bout scale samples and reject outlier BOUTS."""
     usable: dict = {}
     for bout, samples in per_bout.items():
         arr = np.asarray(samples, dtype=np.float64).ravel()
@@ -561,12 +360,7 @@ def robust_scale(per_bout: Mapping, *, mad_k: float = 3.0) -> dict:
 
 
 def bout_kp3d_paths(run_root, fly: int) -> list[Path]:
-    """Every `<run_root>/bouts/bout_*/fly<fly>/kp3d_filt.npz`, sorted by bout.
-
-    Falls back to that bout's `kp3d.npz` when the filtered file is absent, so a
-    recording that is only part-way through preprocessing still yields a scale
-    from the bouts it does have.
-    """
+    """Every `<run_root>/bouts/bout_*/fly<fly>/kp3d_filt.npz`, sorted by bout."""
     bouts_dir = Path(run_root) / "bouts"
     if not bouts_dir.is_dir():
         return []
@@ -591,23 +385,7 @@ def bout_index(path: Path) -> int:
 
 
 def read_bout_kp3d(path: Path, order: Order) -> np.ndarray:
-    """`(T, K, 3)` from a bout artifact, checked against `order` BY NAME.
-
-    A file that names its own keypoint axis (`kp_names`) is verified against
-    `order` and raises on a disagreement. A file that does not is ACCEPTED --
-    it has to be: `bout_kp3d_paths` prefers `kp3d_filt.npz`, and the reference
-    recording's filtered files carry `['conf3d', 'kp3d']` and nothing else, so
-    refusing would make this module unable to read the very recording it is
-    gated against. It is accepted with an announcement, never silently: the
-    keypoint axis is then an ASSUMPTION resting on `kp3d.shape[1]` alone, and
-    an array written in detector order would be measured here as model order.
-    That failure has no symptom -- `WingR_base/V12/V13` read as
-    `T2L_TiTa/TaT1/TaT3` collapses a pair, a collapsed pair is MORE rigid than
-    a real bone, so `within_bone_cv` improves, `across_bone_cv` stays small,
-    the implied body length lands inside the plausible band, and
-    `estimate_fly_scale` returns a confident body size for the wrong anatomy.
-    The one line in the batch log is the only place that can be caught.
-    """
+    """`(T, K, 3)` from a bout artifact, checked against `order` BY NAME."""
     with np.load(path, allow_pickle=True) as z:
         if "kp3d" not in z.files:
             raise KeyError(f"{path} has no 'kp3d' array (it has {sorted(z.files)})")
@@ -639,22 +417,7 @@ def _load_per_bout_scales(
     trunk_names: Sequence[str] | None = None,
     estimator: str = "umeyama",
 ) -> tuple[dict[int, np.ndarray], dict[int, str]]:
-    """`({bout: scale samples}, {bout: file name it was read from})` for one fly.
-
-    The seam `estimate_fly_scale` reads its bouts through, so the pooling can
-    be tested without a run tree. A bout that cannot be measured at all (no
-    rigid pair with both keypoints ever finite) is skipped with an
-    announcement rather than failing the fly; a bout whose keypoints break
-    rigidity (`within_bone_cv` over `WITHIN_BONE_CV_WARN_THRESH`) is used but
-    announced, because that scale is not trustworthy and nothing downstream
-    will notice.
-
-    The second mapping exists because `bout_kp3d_paths` falls back per BOUT: on
-    a part-way-processed recording one fly's pooled scale is a MIXTURE of
-    filtered and raw tracks, and the two are of measurably different quality.
-    Only the bouts that contributed samples appear, so it lines up with the
-    first mapping exactly.
-    """
+    """`({bout: scale samples}, {bout: file name it was read from})` for one fly."""
     order = as_order(kp_order)
     if scale_keypoints == "rigid_segment":
         warn_if_estimator_ignored(estimator, caller="estimate_fly_scale")
@@ -715,29 +478,7 @@ def estimate_fly_scale(
     trunk_names: Sequence[str] | None = None,
     estimator: str = "umeyama",
 ) -> dict:
-    """One body scale for ONE fly, pooled over every bout of that fly.
-
-    The entry point, and the reason the module exists: a body is one size for
-    a whole recording, so every bout of this fly votes (`robust_scale`), and
-    the result is checked against physics (`assert_plausible_body_scale`)
-    before it is returned. Reading a scale from whichever bout came first is
-    exactly the 38x defect.
-
-    Returns `robust_scale`'s dict plus `fly`, `scale_keypoints`,
-    `implied_body_length_mm`, `per_bout_source` and `sources_mixed`. Raises
-    `ValueError` if this fly has no measurable bout, or if the pooled scale is
-    not a plausible fly.
-
-    `per_bout_source` names the file each bout was measured from, because
-    `bout_kp3d_paths` falls back per bout and a part-way-processed recording
-    therefore pools a MIXTURE of `kp3d_filt.npz` and `kp3d.npz`. Measured on the
-    reference recording: fly0 takes bout 28 filtered and bouts 19 and 26 raw,
-    and bout 28's filtered and raw scales are 0.011711 vs 0.011725 -- the filter
-    is known to degrade the female's rigid-bone CV, so the two inputs are not of
-    equal quality. Without this the mixture could not be reconstructed from the
-    artifacts afterwards; `sources_mixed` makes it one boolean, and a mixture
-    also announces.
-    """
+    """One body scale for ONE fly, pooled over every bout of that fly."""
     per_bout, per_bout_source = _load_per_bout_scales(
         run_root,
         fly,

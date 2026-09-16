@@ -1,28 +1,4 @@
-"""Per-frame jaxls (Levenberg-Marquardt) IK solver.
-
-One fixed configuration: an SE3 root variable plus hinge `JointVar`s, no
-smoothness coupling between frames, no joint regularizer, no IRLS/Huber
-reweighting. A multi-frame `solve()` is therefore `T` independent single-frame
-LM solves, `jax.vmap`'d over batches of `settings.batch` frames, each with its
-own termination -- not one coupled batch problem. `SolverSettings` is a
-dataclass with an exact field set, so asking for a knob this configuration
-does not have is a `TypeError` rather than a silent no-op.
-
-Site positions and the frozen (non-optimised) qpos slots are TRACED jaxls
-variables (`OffsetVar`/`FrozenVar`), not jaxpr constants closed over from
-`mjx_model`/`mjx_data` -- see `marker_cost` in `_build_se3`. That is what lets
-ONE compiled program serve every outer iteration of the offsets fit, where
-`set_site_pos` returns a new `mjx_model` each time and would otherwise force a
-new jaxpr, and a new compile, every iteration.
-
-The analyzed-problem cache is keyed on model STRUCTURE, not shape alone:
-`_model_structure_key` identifies a model by the parts that are still
-constants (body tree, joint axes, body offsets), so a `set_site_pos` copy --
-which shares those arrays via `.replace()` -- hits the same entry, while a
-model that genuinely differs there misses and rebuilds. The first `mjx_model`
-an instance solves against is remembered; a later call against a different one
-raises rather than silently reusing a problem built for the wrong model.
-"""
+"""Per-frame jaxls (Levenberg-Marquardt) IK solver."""
 
 from __future__ import annotations
 
@@ -157,15 +133,7 @@ def _quat_from_frame(rear, left, right, front, has_front):
 
 
 def estimate_orientation_from_keypoints(kp_flat, rear, left, right, front) -> np.ndarray:
-    """Per-frame root orientation from 3-4 trunk keypoints. `(T, 4)` wxyz.
-
-    `kp_flat`: `(T, n_kp*3)`. `rear`/`left`/`right`/`front` are KP_NAMES
-    indices; `front` may be `-1` for "no front keypoint configured", in
-    which case the forward axis is built from `rear` and the left/right
-    midpoint instead. Quaternion sign is made consistent frame-to-frame (a
-    running dot-product flip), which is what keeps the WARM START consistent
-    across frames the independent per-frame solver runs separately.
-    """
+    """Per-frame root orientation from 3-4 trunk keypoints. `(T, 4)` wxyz."""
     kp_flat = jnp.asarray(kp_flat)
     t = kp_flat.shape[0]
 
@@ -194,10 +162,7 @@ def estimate_orientation_from_keypoints(kp_flat, rear, left, right, front) -> np
 
 @dataclass(frozen=True)
 class SolverSettings:
-    """LM termination and linear-solver knobs.
-
-    Defaults are the reference run's `stac.per_frame` block.
-    """
+    """LM termination and linear-solver knobs."""
 
     n_iter: int = 500
     lambda_initial: float = 5e-4
@@ -246,13 +211,7 @@ def _hashable(v) -> tuple[float, ...]:
 
 
 def _model_structure_key(mjx_model) -> tuple:
-    """Identity of the model parts still baked into the jaxpr.
-
-    `site_pos` and the frozen qpos are passed as traced data now, so a
-    `set_site_pos` copy MUST hit the cache. Everything else about the model is
-    still a constant and MUST miss. `.replace()` shares the arrays it does not
-    touch, so their `id()` is stable across exactly the copies we want to hit.
-    """
+    """Identity of the model parts still baked into the jaxpr."""
     return (
         int(mjx_model.nq),
         int(mjx_model.nbody),
@@ -265,21 +224,7 @@ def _model_structure_key(mjx_model) -> tuple:
 
 
 def penetration_spec(mj_model, pairs, *, dofs=None, n_u: int = 5, n_v: int = 9) -> dict:
-    """Precompute what the analytic penetration term needs, once per model.
-
-    `pairs` is a list of `(blade_geom_name, target_geom_name)`. The blade is
-    sampled as a disc of points on its own mid-plane -- the wing collision
-    ellipsoids are flat, so a capsule or point approximation would miss the
-    blade's width, which is the part that reaches the abdomen. The target must
-    be a cylinder or a sphere, which have closed-form signed distances.
-
-    `dofs` is an optional `(nq,)` boolean naming which qpos entries the penalty
-    may move; everything else is stop_gradient'd inside the cost. Leave it None
-    and the term pushes on whatever is cheapest, which for a wing is its pitch
-    -- the marker null direction.
-
-    Returns plain arrays; nothing here depends on a solve.
-    """
+    """Precompute what the analytic penetration term needs, once per model."""
     import mujoco as _mj
 
     u = np.linspace(-1.0, 1.0, n_u)
@@ -317,25 +262,7 @@ def penetration_spec(mj_model, pairs, *, dofs=None, n_u: int = 5, n_v: int = 9) 
 
 
 class PerFrameSolver:
-    """Per-frame LM IK against one model structure.
-
-    An instance is tied to the FIRST `mjx_model` STRUCTURE it solves against;
-    build a new one per fly/anatomy. A genuinely different model (body tree,
-    joint axes, body offsets) raises on the next `solve()`/`solve_frame()`
-    rather than silently reusing a problem built for the wrong skeleton --
-    see `_check_model_identity`.
-
-    Two things that do NOT invalidate an instance, because site positions and
-    frozen qpos slots are traced variables rather than jaxpr constants:
-
-    - **`set_site_pos`.** Its `.replace()` copy leaves the structure
-      unchanged, so the cached problem is reused and the new offsets are read
-      at solve time. One solver serves the offsets fit's whole outer loop.
-    - **A different `mjx_data` template under a partial `qs_to_opt` mask.**
-      Frozen slots come from a `FrozenVar` set fresh each `solve()`, so two
-      calls under the same mask but different frozen values get different
-      answers instead of the first call's repeated.
-    """
+    """Per-frame LM IK against one model structure."""
 
     def __init__(self, settings: SolverSettings | None = None) -> None:
         settings = settings if settings is not None else SolverSettings()
@@ -348,18 +275,11 @@ class PerFrameSolver:
 
     @property
     def last_iterations(self) -> np.ndarray:
-        """`(T,)` int32, LM iterations per frame from the last `solve()`.
-
-        Set ONLY by the independent multi-frame path (`T > 1`); a `T == 1`
-        call goes through `_solve_se3` and leaves this stale or unset."""
+        """`(T,)` int32, LM iterations per frame from the last `solve()`."""
         return self._last_iterations
 
     def _check_model_identity(self, mjx_model) -> None:
-        """Raise if this instance is reused across a different model structure.
-
-        `_model_structure_key` hashes the parts still baked into the jaxpr as
-        constants, so a `set_site_pos` copy matches and a different skeleton
-        does not."""
+        """Raise if this instance is reused across a different model structure."""
         key = _model_structure_key(mjx_model)
         if self._model_id is None:
             self._model_id = key
@@ -376,11 +296,7 @@ class PerFrameSolver:
             )
 
     def _pick_linear_solver(self, T: int, tangent_dim: int) -> str:
-        """`self.settings.linear_solver`, or `"dense_cholesky"` for `"auto"`.
-
-        `_solve_se3` is only ever called with `T=1` here, so a sparse solver
-        never pays for itself.
-        """
+        """`self.settings.linear_solver`, or `"dense_cholesky"` for `"auto"`."""
         if self.settings.linear_solver != "auto":
             return self.settings.linear_solver
         return "dense_cholesky"
@@ -401,16 +317,7 @@ class PerFrameSolver:
     ) -> _AnalyzedProblem:
         """Marker-tracking + hinge box-limit costs only: no regularizer and
         no smoothness term.
-
-        Site positions (`offset_var`) and the frozen (non-optimised) qpos
-        slots (`frozen_var`) are traced `jaxls` variables, read through
-        `stop_gradient` exactly like the existing `kp_var` -- NOT jaxpr
-        constants closed over from `mjx_model`/`mjx_data`. That is what lets
-        one compiled program serve every outer iteration of the offsets fit:
-        `mjx_model`/`mjx_data` stay closed over ONLY for the kinematic
-        STRUCTURE (body tree, joint axes, body offsets) and `mjx_data`'s
-        non-qpos fields, which never change within a `PerFrameSolver`
-        instance's lifetime."""
+        """
         n_hinges = nq - FREE_JOINT_NDOF
         dummy_joints = jnp.zeros((n_hinges,))
         dummy_kp = jnp.zeros((n_kp_dim,))
@@ -463,9 +370,6 @@ class PerFrameSolver:
             model = mjx_model.replace(site_pos=mjx_model.site_pos.at[site_idxs].set(offsets))
             data = forward(model, data)
             markers = get_site_xpos(data, site_idxs).flatten()
-            # Sanitize BEFORE subtracting (NaN*0 == NaN), then zero the
-            # residual via the mask, so an occluded keypoint neither
-            # contributes to the cost nor leaks a gradient.
             finite = jnp.isfinite(kp)
             kp_clean = jnp.where(finite, kp, 0.0)
             return (kp_clean - markers) * kp_weights * finite
@@ -495,13 +399,6 @@ class PerFrameSolver:
                 frozen_q = jax.lax.stop_gradient(var_values[frozen_var])
                 q = jnp.concatenate([t_root.translation(), t_root.rotation().wxyz, joints])
                 full_q = jnp.where(qs_to_opt, q, frozen_q)
-                # Restrict WHICH DOFs this term may push: everything outside
-                # `pen_dofs` is stop_gradient'd. Unrestricted it takes its
-                # correction out of wing pitch -- ~99.6% of the marker
-                # Jacobian's null direction -- rotating the blade through flat
-                # for free (median wing residual 1.58x worse). Freezing the
-                # blade instead was worse too (1.19x): the pressure just moves
-                # to the root and drags the whole body.
                 if pen_dofs is not None:
                     full_q = jnp.where(pen_dofs, full_q, jax.lax.stop_gradient(full_q))
                 model = mjx_model.replace(site_pos=mjx_model.site_pos.at[site_idxs].set(offsets))
@@ -512,9 +409,6 @@ class PerFrameSolver:
                     world = data.geom_xpos[bi] + pl @ Rb.T
                     Rt = data.geom_xmat[ti].reshape(3, 3)
                     loc = (world - data.geom_xpos[ti]) @ Rt
-                    # 1e-12 keeps the norm's derivative finite at the axis: a
-                    # sample point landing exactly on the centre line would
-                    # otherwise return NaN.
                     radial = jnp.sqrt(jnp.sum(loc[:, :2] ** 2, axis=1) + 1e-12) - sz[0]
                     axial = jnp.abs(loc[:, 2]) - sz[1]
                     cyl = jnp.maximum(radial, axial)
@@ -560,28 +454,9 @@ class PerFrameSolver:
         site_idxs: jnp.ndarray,
         pen=None,
     ) -> _AnalyzedProblem:
-        """Cache key: `(T, nq, n_kp_dim, _model_structure_key(mjx_model), ...)`.
-
-        `qs_to_opt`/`kp_weights`/`lb`/`ub`/`site_idxs` are in the key because
-        they are baked into `marker_cost`'s and `limit_cost`'s closures --
-        without them a `T=1` root-only problem gets reused for a full-body
-        solve of different shape. `_model_structure_key` is there so a
-        `set_site_pos` copy HITS while a different model MISSES;
-        `_check_model_identity` already raises on the latter, but keying on it
-        here means a reader need not trust that ordering.
-
-        The key does NOT need to cover `mjx_data`: site positions and the
-        frozen (non-optimised) qpos slots are traced `jaxls` variables now
-        (`OffsetVar`/`FrozenVar` in `_build_se3`), read fresh on every
-        `solve()` call rather than baked into the cached cost closure at
-        build time -- so a solver reused across different `mjx_data`
-        templates, or across `set_site_pos` updates, correctly answers each
-        one instead of silently replaying the first."""
+        """Cache key: `(T, nq, n_kp_dim, _model_structure_key(mjx_model), ...)`."""
         self._check_model_identity(mjx_model)
         nq = int(mjx_model.nq)
-        # The spec changes the COST's structure, so it belongs in the key: two
-        # solves differing only in their penetration pairs are different
-        # problems and must not share a compiled one.
         pen_key = (
             None
             if pen is None
@@ -796,27 +671,6 @@ class PerFrameSolver:
         """Solve IK for `T` frames. `q_init` `(T, nq)`; `kp_data` `(T, K*3)`
         (or `(T, K, 3)`) in model units, NaN allowed for a masked keypoint
         coordinate; `qs_to_opt` `(nq,)` bool; `kp_weights` `(K*3,)`.
-
-        `frozen_qpos` `(T, nq)` supplies the values of the DOFs `qs_to_opt`
-        masks OFF, per frame. It defaults to `mjx_data.qpos` broadcast across
-        frames, which is right for a first solve, where every frame starts
-        from the same template. It is NOT right for a refinement pass over
-        frames that already have their own poses: freezing each frame at a
-        single template and fitting the free DOFs to compensate made a
-        wings-only second pass 77x worse than its own starting point. Pass the
-        first pass's `qpos` here for that case.
-
-        `T > 1` takes the independent per-frame vmapped path
-        (`_solve_independent`, sets `last_iterations`); `T == 1` solves
-        directly via `_solve_se3` and does not touch `last_iterations`.
-
-        `offsets` (site positions) and `frozen_q` (the frozen qpos slots)
-        are derived from `mjx_model`/`mjx_data` here and passed into the
-        analyzed problem as TRACED data (`OffsetVar`/`FrozenVar`), not baked
-        in as jaxpr constants -- callers still just pass `mjx_model`/
-        `mjx_data` exactly as before.
-
-        Returns `(T, nq)` qpos.
         """
         kp_data = jnp.asarray(kp_data)
         if kp_data.ndim == 3:
@@ -878,9 +732,7 @@ class PerFrameSolver:
         return np.asarray(qpos)
 
     def solve_frame(self, q0: np.ndarray, **kw) -> np.ndarray:
-        """One frame. `q0` `(nq,)` -> `(nq,)`. The `T=1` case of `solve()`:
-        batches `q0`/`kp_data` to `T=1` and delegates, returning `result[0]`.
-        Accepts the same keyword arguments as `solve()` except `q_init`."""
+        """One frame. `q0` `(nq,)` -> `(nq,)`. The `T=1` case of `solve()`:"""
         kp_data = jnp.asarray(kw.pop("kp_data"))
         kp_flat = kp_data.flatten() if kp_data.ndim > 1 else kp_data
         result = self.solve(q_init=jnp.asarray(q0)[None], kp_data=kp_flat[None], **kw)

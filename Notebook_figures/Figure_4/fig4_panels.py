@@ -1,17 +1,4 @@
-"""The nine Figure 4 panel plotters, plus their spec -> plotter adapters.
-
-Extracted from `3d_tracking_dataset/utils/courtship_figure_panels.py` by an
-AST trace of what the figure calls: 42 top-level definitions and 2343 lines
-reduce to 15, because everything touching cv2, MuJoCo or video decoding is on
-the bundle-export path rather than the plotting path. Bodies are unchanged.
-
-Each plotter takes `(ax, *arrays, **style)` and draws into an axes it does not
-own, which is why the source repo's figbuilder tile-compose machinery was
-droppable: a plain `fig.add_axes(rect)` satisfies the same contract. The
-adapters at the end of this file are the only part of figbuilder that was
-needed -- they translate a panel's `spec` from fig4.json into plotter keyword
-arguments, then apply shared axes cosmetics.
-"""
+"""The nine Figure 4 panel plotters, plus their spec -> plotter adapters."""
 from __future__ import annotations
 
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -65,10 +52,6 @@ def _colored_text_legend(
 ):
     """Draw a legend whose text entries are colored to match their series
     (no line/box marker). Replaces the standard handle+label legend.
-
-    ``handles_labels`` defaults to ``ax.get_legend_handles_labels()``. Any
-    extra ``legend_kwargs`` are forwarded to ``ax.legend`` and override the
-    marker-hiding defaults if the caller wants to tweak placement/spacing.
     """
     if handles_labels is None:
         handles, labels = ax.get_legend_handles_labels()
@@ -152,11 +135,7 @@ def _resolve_pulse_subtype(
     peak_frames: Optional[np.ndarray],
     subtype_labels: Optional[np.ndarray],
 ) -> Optional[str]:
-    """Majority Pslow/Pfast label among pulses whose peaks fall in ``seg``.
-
-    Returns ``None`` if the segment isn't a pulse segment, or the pulse-type
-    inputs are missing / have no peaks inside the segment.
-    """
+    """Majority Pslow/Pfast label among pulses whose peaks fall in ``seg``."""
     if seg.get('type') != 'pulse':
         return None
     if peak_frames is None or subtype_labels is None:
@@ -191,13 +170,7 @@ def _shade_segments(
     fill_alpha: float = 0.20,
     time_unit: str = 'ms',
 ) -> None:
-    """Paint axvspans for each non-quiet song segment.
-
-    When ``pulse_peak_frames`` + ``pulse_subtype_labels`` are supplied, pulse
-    segments are colored per the dominant pulse sub-type (Pslow/Pfast). Caller
-    may override fills / edges via ``fills`` / ``edges`` dicts (shallow-merged
-    over module defaults), and pulse-subtype colors via ``pulse_type_colors``.
-    """
+    """Paint axvspans for each non-quiet song segment."""
     if seen_labels is None:
         seen_labels = set()
     _fills = {**_SEG_FILL, **(fills or {})}
@@ -251,11 +224,6 @@ def panel_wing_z_traces(
     time_unit: str = 'ms',
 ) -> None:
     """Plot left/right wing-V13 z-position with song shading + per-pulse markers.
-
-    Segment shading is drawn once over the union of L+R segments (so L/R
-    overlap does not double-shade). Each individual pulse event is marked
-    with a vertical line colored by its own Pslow / Pfast label, so every
-    pulse is individually identifiable.
 
     Parameters
     ----------
@@ -346,11 +314,7 @@ def panel_scutellum_z_trace(
     line_kwargs: Optional[Dict] = None,
     time_unit: str = 'ms',
 ) -> None:
-    """Plot scutellum (body) z-position over the same time interval.
-
-    When ``pulse_peak_frames`` + ``pulse_subtype_labels`` are provided, pulse
-    segments are shaded by dominant Pslow/Pfast type.
-    """
+    """Plot scutellum (body) z-position over the same time interval."""
     lk = {'lw': 0.7, **(line_kwargs or {})}
     _ms_scale = 1e-3 if time_unit == 's' else 1.0
     if segments is not None:
@@ -381,15 +345,7 @@ def panel_male_pitch(
     title: str = '',
     time_unit: str = 'ms',
 ) -> None:
-    """Plot male thorax pitch (red) and target pitch to the female (blue).
-
-    ``male_pitch_deg`` is the thorax body-axis elevation (positive = nose up)
-    and ``target_pitch_deg`` is the elevation of the male-scutellum → female-COM
-    vector. Both are degrees; where the two traces overlap, the male is aimed
-    at the female. Song segments are shaded behind the traces via the same
-    `_shade_segments` helper as Panel B; ``min_segment_ms`` filters ultra-short
-    detections.
-    """
+    """Plot male thorax pitch (red) and target pitch to the female (blue)."""
     lk = {'lw': 0.8, **(line_kwargs or {})}
     lg = {'loc': 'upper left', 'ncols': 2,
           'columnspacing': 0.6, **(legend_kwargs or {})}
@@ -429,12 +385,7 @@ def panel_pitch_alignment_violin(
     rng_seed: int = 0,
     title: str = '',
 ) -> None:
-    """Violin + per-bout dots of median |pitch alignment| across bouts.
-
-    Each dot is one bout's median absolute alignment (degrees); the
-    violin shows the distribution across all bouts. ``exemplar_idx``
-    highlights that bout in ``exemplar_color``.
-    """
+    """Violin + per-bout dots of median |pitch alignment| across bouts."""
     vals = np.asarray(per_bout_values, dtype=float)
     finite_mask = np.isfinite(vals)
     finite = vals[finite_mask]
@@ -497,12 +448,7 @@ def panel_z_height_singing_vs_walking(
     rng_seed: int = 0,
     title: str = 'z height by state',
 ) -> None:
-    """Compare scutellum z-height during pulse, sine, and free walking.
-
-    ``colors`` overrides the default (pulse/sine/walking) triplet. When
-    ``show_points`` is True (default), raw samples are jittered and scattered
-    on top of each box/violin.
-    """
+    """Compare scutellum z-height during pulse, sine, and free walking."""
     p = np.asarray(pulse_z,   dtype=float); p = p[np.isfinite(p)]
     s = np.asarray(sine_z,    dtype=float); s = s[np.isfinite(s)]
     w = np.asarray(walking_z, dtype=float); w = w[np.isfinite(w)]
@@ -577,12 +523,7 @@ def panel_sine_wing_inphase(
     legend_kwargs: Optional[Dict] = None,
     title: str = 'Sine song: extended + folded wing in phase',
 ) -> None:
-    """Overlaid extended- vs folded-wing V13 z traces over a slice.
-
-    Caller resolves which wing is extended at each frame (typically by
-    comparing per-frame extension angles) and passes the two resulting traces
-    here.
-    """
+    """Overlaid extended- vs folded-wing V13 z traces over a slice."""
     cc = {**WING_PHASE_COLORS, **(colors or {})}
     lk = {'lw': 0.8, **(line_kwargs or {})}
     lg = {'loc': 'upper center', **(legend_kwargs or {})}
@@ -590,11 +531,6 @@ def panel_sine_wing_inphase(
     t_ms = np.asarray(t_ms, dtype=float)
     wing_extended_z = np.asarray(wing_extended_z, dtype=float)
     wing_folded_z = np.asarray(wing_folded_z, dtype=float)
-    # `frame_range` was declared and documented ("over a slice") but never
-    # applied, so this panel always drew the WHOLE bout: at 2508 ms the wing
-    # beat aliases into an apparent slow drift and the in-phase relationship
-    # the panel exists to show is invisible. Slice here, as the sibling
-    # `panel_wing_z_traces` does (:1567).
     if frame_range is not None:
         lo, hi = int(frame_range[0]), int(frame_range[1])
         sl = slice(max(lo, 0), min(hi, t_ms.size))
@@ -650,16 +586,7 @@ def panel_joint_angle_density(
     title: str = 'Wing angle: pulse vs sine',
     legend_kwargs: Optional[Dict] = None,
 ) -> None:
-    """Overlaid 1-D histogram + KDE of the extended-wing angle by song state.
-
-    Two distributions are drawn on a single axes:
-
-    * Pulse  (solid, ``SONG_COLORS['pulse']``)
-    * Sine   (solid, ``SONG_COLORS['sine']``)
-
-    Histograms (probability-density normalised) are drawn translucent and
-    KDE curves (Silverman bandwidth) are overlaid on top.
-    """
+    """Overlaid 1-D histogram + KDE of the extended-wing angle by song state."""
     sc = {'pulse': SONG_COLORS['pulse'], 'sine': SONG_COLORS['sine'],
           **(colors or {})}
     edges = np.linspace(range_deg[0], range_deg[1], int(bins) + 1)
@@ -776,9 +703,6 @@ def panel_wing_phase_polar(
                 markerfacecolor=mk.get('color', '#222222'),
                 markeredgecolor='white', markeredgewidth=0.6,
                 linestyle='none', zorder=5, clip_on=False)
-        # ax.text(0.5, 0.5, f'|R|={r_len:.2f}',
-        #         transform=ax.transAxes, ha='center', va='center',
-        #         fontsize=6, color='#222222')
 
     ax.set_theta_zero_location('E')
     ax.set_theta_direction(1)
@@ -882,21 +806,8 @@ def panel_pulse_classification(
 
 
 # ======================================================================
-# spec -> plotter adapters
-#
-# Ported from `figbuilder/panels/courtship.py`, whose PanelType subclasses did
-# exactly one useful thing: translate a panel's `spec` dict from fig4.json
-# into the plotter's keyword arguments, then apply shared axes cosmetics. The
-# registry, JSON schemas and browser-editor plumbing around them are not
-# needed to draw a figure, so only the `draw` bodies came across -- unchanged,
-# because each one encodes a styling decision the published figure depends on
-# (panel D's rebased time axis, panel G's "free running" relabel, panel C's
-# pinned x limits).
 # ======================================================================
 
-#: The assay is FREE RUNNING, not free walking. `panel_z_height_singing_vs_
-#: walking` hardcodes a 'free walk\n(n=...)' tick label; the zheight adapter
-#: substitutes this in after drawing, preserving the '(n=...)' suffix.
 FREE_LABEL = "free running"
 
 _PULSE_TYPES = ("Pslow", "Pfast")
@@ -930,13 +841,7 @@ def _legend_kwargs(spec):
 
 
 def _draw_zoom_marker(ax, spec) -> None:
-    """Outline `spec['zoom_marker']` (a FRAME range) on an already-drawn axes.
-
-    A zoomed companion panel is uninterpretable unless the reader can see
-    where in the parent trace it came from; the published Figure 4 marks it
-    with a dashed rectangle. The range is in FRAMES and converted here with
-    the axes' own fs/time_unit, because the trace's x axis may be ms or s.
-    """
+    """Outline `spec['zoom_marker']` (a FRAME range) on an already-drawn axes."""
     zm = spec.get("zoom_marker")
     if zm is None:
         return
@@ -954,12 +859,7 @@ def _draw_zoom_marker(ax, spec) -> None:
 
 
 def apply_cosmetics(ax, spec) -> None:
-    """Shared per-panel cosmetics, applied AFTER the plotter has drawn.
-
-    The plotters are consumed unmodified, so anything to change about the
-    resulting axes -- spines, tick labels, legend placement -- has to happen
-    afterwards on the axes object. Every option is absent-by-default.
-    """
+    """Shared per-panel cosmetics, applied AFTER the plotter has drawn."""
     if not spec:
         return
     spines = spec.get("spines")
@@ -1037,12 +937,7 @@ def draw_male_pitch(ax, data, spec):
 
 
 def draw_video_kp(ax, data, spec):
-    """Raw video frame (raster) with the keypoints drawn as VECTOR marks.
-
-    Baking the dots into the bitmap made them blobs that blurred with the
-    frame, so the crop rides at NATIVE resolution and the keypoints are
-    scattered here in crop-local pixel coordinates.
-    """
+    """Raw video frame (raster) with the keypoints drawn as VECTOR marks."""
     img = np.asarray(data["img"])
     ax.imshow(img, interpolation=spec.get("interpolation", "nearest"))
     size = float(spec.get("kp_size", 1.4))
@@ -1111,10 +1006,6 @@ def draw_wing_polar(ax, data, spec):
 def draw_sine_inphase(ax, data, spec):
     t_ms = np.asarray(data["t_ms"], float)
     fr = _frame_range(spec)
-    # A zoom inset's ABSOLUTE times carry nothing the reader needs -- the
-    # dashed marker on panel C already says where the window came from -- and
-    # read as an arbitrary broken range. Shift the whole trace, not the slice,
-    # so the plotter's own frame_range still selects the same frames.
     if spec.get("rebase_time") and fr is not None and t_ms.size:
         lo = max(0, min(int(fr[0]), t_ms.size - 1))
         t_ms = t_ms - t_ms[lo]

@@ -1,39 +1,4 @@
-"""The kp-video render: any per-bout keypoint artifact drawn on the raw video.
-
-This is the pipeline's primary verification instrument (see CLAUDE.md: "a
-change that moves numbers is not done until a figure shows what it did on
-real frames"), and it is designed to run automatically after every bout's
-lift. It renders one panel per camera plus a 3D world panel, with each fly's
-lifted 3D keypoints reprojected onto its own camera's frame.
-
-EXPECTATION -- what a correct render looks like: every drawn keypoint sits ON
-the fly's body in every camera panel at every frame, leg-chain lines follow
-one leg's segments proximal to distal with no line jumping between legs or
-between cameras, and fly0/fly1 (cyan/orange, or their sex label when
-`sex.json`/`fly_sex` is available) never swap identity across the bout. A
-keypoint that looks plausible but sits on the WRONG camera's image, or a
-"leg" segment that bridges two different legs, is exactly the class of bug
-CLAUDE.md documents (keypoint-order and camera-order traps) -- both survive a
-quick glance and only fail a check against a rigid/anatomical invariant.
-
-SCHEMA. `<bout_dir>/fly<f>/{kp3d,kp3d_filt,fitted}.npz` (this plan produces
-only `kp3d.npz`; the other two names are accepted now so this render does not
-need to change when they arrive) plus `<bout_dir>/mvq_meta.json`
-(`bout_start_frame`, `n_frames`, `fly_sex`), describing the BOUT, not one fly.
-
-ORDERING. Every array is read through `tracking.io.artifacts` (`BoutArtifact`
-for `kp3d`, `load_npz` directly for the other two names -- both refuse an
-artifact with no order stamp; there is no "fall back and announce" path,
-because an unstamped artifact is refused at read time). Keypoints are indexed
-by
-NAME (`tracking.viz.colors.keypoint_groups`/`leg_chains`, `Order.index`),
-never by a bare integer. Because this render always REPROJECTS (there is no
-2D source among `kp3d`/`kp3d_filt`/`fitted`), the rig's camera order is
-checked against the cameras actually present in `video_dir` before a single
-frame is drawn, and the render refuses to start on a mismatch -- one camera's
-keypoints on another camera's image still looks almost plausible, which is
-how this class of bug survives review.
-"""
+"""The kp-video render: any per-bout keypoint artifact drawn on the raw video."""
 
 from __future__ import annotations
 
@@ -55,17 +20,10 @@ _SOURCE_FILENAME = {"kp3d": "kp3d.npz", "kp3d_filt": "kp3d_filt.npz", "fitted": 
 
 _COLS = 4
 _CELL = 220
-# These frames are 1936 x 448 -- long, shallow arena strips. The height is
-# already small enough to keep nearly all of, so the crop tracks the flies in
-# WIDTH only and takes a fixed slab of the height. Chasing them vertically in a
-# 448 px strip buys no context and is most of the residual wobble.
 _CROP_MARGIN = 1.5  # room around the flies' bounding box, horizontally
 _CROP_KEEP_H = 1.0  # keep the FULL frame height; only width tracks the flies
 _CELL_MIN_CROP = 260  # never magnify a lone fly into blur
 _CROP_SMOOTH = 61  # frames; follow the flies' drift, not their per-frame jitter
-# Re-render the 3D axes only once the panning view has drifted this fraction of
-# its span. Redrawing them every frame would hand back the 95x saving that
-# projecting the points ourselves buys; see `_Panel3D`.
 _VIEW3D_REDRAW = 0.04
 _BANNER_H = 40
 
@@ -103,32 +61,7 @@ def _load_fly_kp3d(bout_dir: Path, fly: int, source: str, kp: Order, rig: Camera
 
 
 class _Panel3D:
-    """The 3D world panel: matplotlib axes for the frame, cv2 for the data.
-
-    Replaces a hand-rolled isometric projection that drew the world UPSIDE
-    DOWN -- `y3 = y2*cos(b) - z*sin(b)` made larger z smaller, and the panel
-    fit flipped again, so the two flips did not cancel and every fly rendered
-    dorsal-side-down. Nothing caught it because nothing asked which way was up.
-
-    SPEED. Matplotlib draws the axes, grid, ticks and labels correctly; it is
-    also slow -- a full `canvas.draw()` per frame measures 37.1 ms, i.e. 74.5 s
-    on a 2007-frame bout. So the axes are rendered ONCE into a background
-    image, and each frame projects the points with mplot3d's OWN projection
-    matrix (`proj3d.proj_transform` + `ax.transData`) and draws them with cv2
-    over a copy. Measured: 0.39 ms/frame, 0.8 s for the bout -- 95x.
-
-    Blitting via `ax.draw_artist` was tried first and REJECTED: it is 15x
-    faster but does not re-run the 3D projection, so markers keep the screen
-    positions they had at the last full draw and stop tracking the data. The
-    orientation test caught it. Projecting explicitly is the honest version of
-    the same idea -- matplotlib's matrix, our rasteriser.
-
-    The view PANS at a fixed span (see `_view3d_path`). Re-rendering the
-    background on every pan would give the cost straight back, so it is
-    re-rendered only when the centre has drifted past `_VIEW3D_REDRAW` of the
-    span, and the points are always projected with the limits the cached
-    background was drawn at -- so markers can never drift against their grid.
-    """
+    """The 3D world panel: matplotlib axes for the frame, cv2 for the data."""
 
     def __init__(self, kp: Order, chains, limits, size: int, labels):
         import matplotlib
@@ -218,18 +151,7 @@ class _Panel3D:
 
 
 def _world_limits(arrays, pct: float = 1.0, pad_frac: float = 0.10):
-    """Fixed x/y/z limits over the drawn points, ROBUST to outlier frames.
-
-    Percentile bounds, not min/max. Measured on bout 28: min/max gives a z
-    range of 90 units while the two flies actually span 25 -- a handful of
-    frames where a fit went wrong (the female's end-of-bout tangle) stretch
-    the axis more than three-fold and leave the flies as specks for the whole
-    render. Clipping at the 1st/99th percentile keeps the view on the animals;
-    a point outside simply draws outside the axes.
-
-    Computed ONCE so the panel does not rescale frame to frame -- a panel whose
-    axes move cannot be read as a trajectory.
-    """
+    """Fixed x/y/z limits over the drawn points, ROBUST to outlier frames."""
     pts = np.concatenate([a.reshape(-1, 3) for a in arrays], axis=0) if arrays else np.zeros((0, 3))
     finite = pts[np.isfinite(pts).all(-1)]
     if len(finite) == 0:
@@ -242,18 +164,7 @@ def _world_limits(arrays, pct: float = 1.0, pad_frac: float = 0.10):
 
 
 def _view3d_path(arrays, T: int, margin: float = 1.6, pct: float = 95.0):
-    """`(centres (T,3), span (3,))` for a 3D view that PANS but never rescales.
-
-    Fixed limits over a whole bout are unusable here: the flies roam the arena,
-    so the union of 2007 frames spans ~75 units in z while the two animals span
-    ~25 at any instant, leaving them as specks. Moving the limits per frame
-    would fix the size and break the reading -- a panel that rescales cannot be
-    compared across frames.
-
-    So the SPAN is constant (the `pct`th percentile of per-frame extents, times
-    `margin`) and only the CENTRE moves, smoothed like the 2D crop. The panel
-    pans with the flies at a fixed scale.
-    """
+    """`(centres (T,3), span (3,))` for a 3D view that PANS but never rescales."""
     cen = np.full((T, 3), np.nan)
     ext = np.full((T, 3), np.nan)
     for t in range(T):
@@ -285,14 +196,7 @@ def _view3d_path(arrays, T: int, margin: float = 1.6, pct: float = 95.0):
 
 
 def _skeleton_chains(kp: Order):
-    """Leg chains PLUS the body axis, the head, and each wing.
-
-    `leg_chains` alone gives six legs and nothing joining them, so the 3D
-    panel reads as a cloud of dots with six spidery arms and no fly in the
-    middle. These extra chains are what make it legible as an animal. Every
-    name is filtered against `kp`, so an anatomy missing one simply loses that
-    segment rather than raising.
-    """
+    """Leg chains PLUS the body axis, the head, and each wing."""
     extra = [
         ["Antenna_Base", "Scutellum", "Abd_A4", "Abd_tip"],  # body axis
         ["EyeL", "Antenna_Base", "EyeR"],  # head
@@ -309,11 +213,7 @@ def _skeleton_chains(kp: Order):
 
 
 def _smooth(values: np.ndarray, window: int) -> np.ndarray:
-    """Centred moving average with edge padding, over a `(T,)` path.
-
-    Edges are padded by repetition rather than shrinking the window, so the
-    first and last frames are not pulled toward the middle of the bout.
-    """
+    """Centred moving average with edge padding, over a `(T,)` path."""
     if window <= 1 or len(values) <= 2:
         return values
     w = int(min(window, len(values)))
@@ -325,27 +225,8 @@ def _smooth(values: np.ndarray, window: int) -> np.ndarray:
 
 
 def _crop_path(rig, kp3d_by_fly, cmp_kp3d, T: int, reader_hw=None):
-    """`{camera_index: (cx, cy, half_w, half_h)}`, each `(T,)` and SMOOTHED.
-
-    Computed for every frame up front so the render loop only looks it up:
-    a window recomputed per frame chases the flies' jitter and the panel
-    shakes. Measured on bout 28, camera 0: the worst frame-to-frame jump falls
-    from 52.8 px to 1.21 px once smoothed.
-
-    The window SIZE is constant for the whole render (the 90th percentile of
-    what each frame needs) and only its CENTRE moves. A size that varies would
-    vary the zoom, and with it the displayed height and the flies' apparent
-    size. The height is the full frame (`_CROP_KEEP_H`).
-
-    A frame with no finite point inherits the previous frame's box rather than
-    snapping to the image centre -- a crop that jumps to the middle whenever
-    tracking drops out is exactly the jitter this removes, and the female has
-    a 472-frame gap in this bout.
-    """
+    """`{camera_index: (cx, cy, half_w, half_h)}`, each `(T,)` and SMOOTHED."""
     arrays = [a for a in (*kp3d_by_fly.values(), *cmp_kp3d.values())]
-    # Project each fly's WHOLE trajectory once, not once per (frame, camera):
-    # `project` returns every camera anyway, so a per-camera loop repeats the
-    # same einsum seven times over.
     projected = [np.asarray(rig.project(a[:T])) for a in arrays]
     out = {}
     for ci in range(len(rig.cameras)):
@@ -374,13 +255,6 @@ def _crop_path(rig, kp3d_by_fly, cmp_kp3d, T: int, reader_hw=None):
             for i in range(good[0] + 1, good[-1] + 1):
                 if not np.isfinite(arr[i]):
                     arr[i] = arr[i - 1]
-        # ONE half-width for the whole render, not a smoothed per-frame one.
-        # The window's SIZE sets the zoom (`_CELL / crop_width`), the zoom sets
-        # the displayed height (`frame_height * zoom`), and so a width that
-        # changes frame to frame makes the panel breathe vertically and the
-        # flies change size -- even with the full frame height kept, which is
-        # what made the height look like it was still being cropped. Fixed
-        # size, moving centre: it pans, exactly like the 3D view.
         finite_hw = hw[np.isfinite(hw)]
         fixed_hw = float(np.percentile(finite_hw, 90.0)) if len(finite_hw) else _CELL_MIN_CROP / 2
         out[ci] = (
@@ -428,12 +302,7 @@ def _draw_skeleton(
     override: tuple[int, int, int] | None = None,
     radius: int = 2,
 ) -> None:
-    """Draw leg-chain lines only between ADJACENT PRESENT joints, then points.
-
-    A missing joint never draws a fabricated segment -- see the module and
-    CLAUDE.md's warning that an invented segment in a verification figure is
-    worse than a gap.
-    """
+    """Draw leg-chain lines only between ADJACENT PRESENT joints, then points."""
     line_colour = (
         override
         if override is not None
@@ -465,15 +334,7 @@ def render_kpvideo(
     colour_by: str = "fly",
     fps: float = 30,
 ) -> str:
-    """Render the standard kp-video for one bout: N camera panels + 3D panel.
-
-    `video_dir` holds the `Cam*.mp4` files (`recording.session_dir` in
-    production); `recording` may be `None` when `video_dir` is given
-    explicitly. `source` picks which per-fly array is drawn (`kp3d`,
-    `kp3d_filt`, or `fitted`); `compare=<other bout_dir>` draws that run's
-    same-source arm underneath in white. `colour_by="fly"` (default) colours
-    each fly cyan/orange; `colour_by="group"` colours by anatomy instead.
-    """
+    """Render the standard kp-video for one bout: N camera panels + 3D panel."""
     if source not in SOURCES:
         raise ValueError(f"source must be one of {SOURCES}, got {source!r}")
 
@@ -486,19 +347,10 @@ def render_kpvideo(
 
     kp = as_order(kp_order)
 
-    # This render always reprojects (kp3d/kp3d_filt/fitted are 3D-only), so
-    # the rig's camera order must equal the cameras actually on disk -- see
-    # the module docstring's camera-order-trap warning.
     require_same(rig.cameras, _video_camera_order(video_dir), what="camera")
 
     meta_path = bout_dir / "mvq_meta.json"
     meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
-    # `bout_start_frame` says WHERE IN THE RECORDING this bout's frame 0 sits.
-    # Defaulting it to 0 does not degrade the render -- it silently plays the
-    # wrong footage. A bout starting at frame 446306 rendered from 0 shows the
-    # flies as they were 446306 frames earlier, with this bout's keypoints
-    # drawn confidently on top of them, and the overlay still LOOKS like a
-    # skeleton. That shipped once; it is a hard failure now.
     if "bout_start_frame" not in meta:
         raise FileNotFoundError(
             f"{meta_path} is missing or has no `bout_start_frame`, so this render "
@@ -540,12 +392,6 @@ def render_kpvideo(
         kp, _skeleton_chains(kp), _world_limits(all_pts), _CELL, panel_labels
     )
 
-    # Crop path, computed for EVERY frame up front and then smoothed.
-    #
-    # Computing it per frame inside the loop makes the window chase each
-    # frame's noise, and the panel shakes. Smoothing needs the whole path, so
-    # it cannot be done streaming -- hence the precompute. Cost is one
-    # projection per camera per frame, which is trivial beside decoding.
     crop_path = _crop_path(rig, kp3d_by_fly, cmp_kp3d, T, reader_hw=None)
     view3d_centres, view3d_span = _view3d_path([*kp3d_by_fly.values(), *cmp_kp3d.values()], T)
 
@@ -574,25 +420,12 @@ def render_kpvideo(
                     )
                     h0, w0 = frame_bgr.shape[:2]
 
-                    # The crop for this camera/frame comes from the SMOOTHED
-                    # path computed before the loop: a window that recomputes
-                    # itself each frame chases the flies' jitter and the panel
-                    # shakes. Wider than tall, because these arenas are long and
-                    # the flies travel along them.
                     pcx, _pcy, phw, _phh = crop_path[ci]
                     cx = float(pcx[t])
                     half_w = float(np.clip(phw[t], _CELL_MIN_CROP / 2, w0 / 2))
                     # Height: the full frame (see _CROP_KEEP_H), never tracked.
                     cy = h0 / 2.0
                     half_h = h0 * _CROP_KEEP_H / 2.0
-                    # Clamp the window's ORIGIN and keep its SIZE. Clipping
-                    # the far edge instead makes
-                    # the crop narrower whenever the flies approach a frame
-                    # boundary; the zoom is `_CELL / crop_width`, so a narrower
-                    # crop zooms IN and the displayed height grows with it --
-                    # measured 145 px -> 152 px between two frames, which reads
-                    # as the panel height changing even though the height is
-                    # never cropped.
                     crop_w = int(min(round(2 * half_w), w0))
                     crop_h = int(min(round(2 * half_h), h0))
                     x0 = int(np.clip(round(cx - half_w), 0, max(w0 - crop_w, 0)))
@@ -705,11 +538,4 @@ def render_kpvideo(
                 )
                 yield canvas
 
-    # macro_block_size=1: this render's whole point is pixel-accurate
-    # correspondence between world/2D keypoints and the encoded frame -- the
-    # default block-aligned padding does not merely pad, imageio/ffmpeg
-    # RESIZES (stretches) a non-block-aligned frame to hit the target size,
-    # which silently shifts every drawn pixel a few percent off the position
-    # this function computed. W/H are always even (see above), so this never
-    # hits write_video's odd-dimension guard.
     return write_video(out_path, frames(), fps=fps, macro_block_size=1)

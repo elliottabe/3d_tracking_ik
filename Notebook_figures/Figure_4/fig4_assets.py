@@ -1,25 +1,4 @@
-"""Panel A/H/I/J inputs: video crops, MuJoCo pair renders, SAM3 resolution.
-
-Everything that reads something other than the combined h5. Extracted by AST
-trace from `3d_tracking_dataset/utils/courtship_figure_panels.py` and
-`scripts/figures/export_fig4_bundle.py`, bodies unchanged.
-
-Most of this exists to answer four questions that look trivial and are not,
-each of which produces an entirely plausible figure of the wrong animal when
-answered wrong:
-
-* Which SAM3 bout is this bout? Ordinal position in the combined h5 is a
-  permutation of the tree's numbering, so `_resolve_session_bout` resolves it
-  from the recording's own bout summary and refuses an ambiguous match.
-* Which mask slot is the male? From a reviewed `sex.json`, never slot order.
-* Which camera axis is which camera? `_resolve_sam3_camera_index` maps by NAME:
-  the mask npz's stored `cameras` array is a different order from the
-  calibration glob order.
-* Which video frame is bout frame 0? `_slot_to_raw_frame` goes through the
-  recording's `sync_plan.json`, since dropped frames mean slot != raw index.
-
-Needs a GPU node and MUJOCO_GL=egl for the panel-H renders.
-"""
+"""Panel A/H/I/J inputs: video crops, MuJoCo pair renders, SAM3 resolution."""
 from __future__ import annotations
 
 import os
@@ -67,11 +46,7 @@ def _dlt_load(csv_path: str | Path) -> np.ndarray:
     return coeffs
 
 def _dlt_project(coeffs: np.ndarray, xyz: np.ndarray) -> np.ndarray:
-    """Project 3D world points to 2D pixel coords with the standard 11-param DLT.
-
-    ``xyz`` is broadcast over leading axes; trailing dim must be 3. Returns an
-    array with the same leading shape and trailing dim 2 (u, v in pixels).
-    """
+    """Project 3D world points to 2D pixel coords with the standard 11-param DLT."""
     L = np.asarray(coeffs, dtype=float).reshape(11)
     pts = np.asarray(xyz, dtype=float)
     if pts.shape[-1] != 3:
@@ -115,22 +90,6 @@ def floor_align_qpos_pair(
 ) -> np.ndarray:
     """Return a copy of ``qpos_pair`` with each fly's free-joint root-z shifted
     so its lowest-standing geom surface touches ``floor_z`` in every frame.
-
-    ``floor_z_offset`` (default 0) is added to the per-frame shift, so a
-    positive value pushes the fly further down into the floor (useful when
-    the claw-tip touches visually read as floating at grazing camera angles).
-
-    ``qpos_pair`` is laid out as ``[fly0_qpos | fly1_qpos]`` with each fly
-    starting in a 7-dof free joint (xyz + quat), so root-z lives at index
-    ``fly_nq * k + 2`` for fly ``k``. ``fly_nq`` defaults to ``model.nq // 2``.
-
-    Geoms are assigned to a fly by a case-insensitive substring match on their
-    parent body name against ``fly_suffixes`` (e.g. ``'_fly0'``). The lowest
-    surface per fly is ``min(geom_xpos[:, 2] - geom_rbound[:])`` — i.e. the
-    bottom of each geom's bounding sphere — which works for mesh feet.
-
-    When ``floor_z`` is ``None`` it is auto-detected from the z of the geom
-    named ``floor_geom_name`` (plane geoms store z in ``geom_pos``).
     """
     import mujoco
 
@@ -158,9 +117,6 @@ def floor_align_qpos_pair(
                 geom_fly[g] = fi
                 break
 
-    # Local AABB corner offsets (8 corners of a unit box in ±1 space). The
-    # true world-frame bottom of each geom comes from transforming these by
-    # its rotation. Tighter than geom_rbound, so feet actually touch the floor.
     corner_signs = np.array([
         [+1, +1, +1], [+1, +1, -1], [+1, -1, +1], [+1, -1, -1],
         [-1, +1, +1], [-1, +1, -1], [-1, -1, +1], [-1, -1, -1],
@@ -201,31 +157,7 @@ def estimate_rig_pose_from_qpos(
     two_flies_per_bout: bool = True,
     exclude_keys: Sequence[str] = ('info',),
 ) -> Dict[str, object]:
-    """Estimate the rig's xy center and yaw from all fly root-xy samples.
-
-    Fly root xy (qpos indices 0,1 per fly) lives in the camera-calibration
-    world frame, but the rig mesh is anchored at the MuJoCo world origin.
-    Aggregating every fly's xy across all bouts in ``data`` gives both the
-    rig's xy center (sample centroid) and its long-axis orientation
-    (principal axis of the centered covariance).
-
-    ``data`` maps bout_key → dict with a ``'qpos'`` array of shape
-    ``(T, nq)``. When ``two_flies_per_bout`` is True and ``nq >= 2*fly_nq``,
-    fly1's xy is taken from columns ``fly_nq:fly_nq+2`` as well.
-
-    Returns a dict with:
-      ``center_xy`` — (cx, cy) of the rig center in the calibration frame
-      ``yaw_rad``   — dominant-eigenvector angle, sign-fixed so ``v_x >= 0``
-      ``major_len`` — full extent (max-min) along the major axis
-      ``minor_len`` — full extent along the minor axis
-      ``n_points`` — total number of finite xy samples used
-
-    The rig center is the midpoint of the PCA-aligned bounding box of the
-    fly xy samples, not the raw centroid: flies typically spend unequal time
-    on different sides of a narrow chamber, so the mean drifts off-center.
-    The midpoint is unbiased as long as their range is symmetric about the
-    true rig center — a much weaker assumption.
-    """
+    """Estimate the rig's xy center and yaw from all fly root-xy samples."""
     keys = (list(bout_keys) if bout_keys is not None
             else [k for k in data.keys() if k not in exclude_keys])
     xy_chunks: List[np.ndarray] = []
@@ -255,9 +187,6 @@ def estimate_rig_pose_from_qpos(
     if v[0] < 0:
         v = -v
     yaw = float(np.arctan2(v[1], v[0]))
-    # Rotate samples into the PCA-aligned frame and take the midpoint of the
-    # axis-aligned bounding box. This recovers the rig center robustly even
-    # when flies spend unequal time on each side of the chamber.
     c, s = np.cos(-yaw), np.sin(-yaw)
     R_inv = np.array([[c, -s], [s, c]])
     xy_local = (xy - mean_xy) @ R_inv.T
@@ -277,13 +206,7 @@ def estimate_rig_pose_from_qpos(
     }
 
 def _courtship_pair_anatomy(cameras: Optional[Sequence[str]] = None):
-    """AnatomyConfig with every fly category duplicated per ``_fly0``/``_fly1``.
-
-    Categories use ``body_substring=[name, flyN], all=true`` so each rule
-    matches only the geoms on its intended fly even though both flies share
-    the same unsuffixed body names before MjSpec ``attach_body`` renames
-    them with the per-fly suffix.
-    """
+    """AnatomyConfig with every fly category duplicated per ``_fly0``/``_fly1``."""
     from mujoco_visualizer.config import AnatomyConfig, CategoryRule
 
     pairs = [
@@ -307,13 +230,6 @@ def _courtship_pair_anatomy(cameras: Optional[Sequence[str]] = None):
         ('T3_right',      ['t3', 'right'], True),
     ]
 
-    # eye_red must precede `head` so the `head_red` eye geom is bucketed there.
-    # Use geom_substring for the fly-tag constraint (geom names carry the
-    # ``_fly0`` / ``_fly1`` suffix too), so each rule ANDs the body match
-    # with the geom-name tag match. This avoids the edge case where a rule
-    # with ``all=False`` over multiple body substrings would match on the
-    # tag alone and sweep in unrelated bodies (e.g. proboscis rule grabbing
-    # wing geoms because both contain "fly0").
     rules: List[CategoryRule] = []
     for tag in ('fly0', 'fly1'):
         rules.append(CategoryRule(
@@ -334,11 +250,7 @@ def _courtship_pair_anatomy(cameras: Optional[Sequence[str]] = None):
     )
 
 def _remap_settings_keys(settings: dict, suffix: str) -> dict:
-    """Return a copy of ``settings`` with color keys suffixed (``_fly0`` etc).
-
-    Only the ``colors`` block is remapped; flags / camera / lighting / floor /
-    skybox apply globally and are left untouched.
-    """
+    """Return a copy of ``settings`` with color keys suffixed (``_fly0`` etc)."""
     import copy as _copy
     out = _copy.deepcopy(settings)
     if isinstance(out.get('colors'), dict):
@@ -362,17 +274,7 @@ def _apply_rig_pose_override(
     rig_pos: Optional[Sequence[float]],
     rig_quat: Optional[Sequence[float]],
 ) -> None:
-    """Mutate the spec so the rig mesh RENDERS at the requested world pose.
-
-    MuJoCo's mesh compiler re-centers mesh vertices to the mesh COM and aligns
-    principal inertial axes to the body frame, so the compiled ``geom_pos`` /
-    ``geom_quat`` differ from the spec values. This helper probes that
-    mesh-induced shift by compiling a fresh copy of ``floor_xml``, then solves
-    for the spec-level ``pos``/``quat`` that produce the desired compiled pose.
-
-    ``rig_pos`` may be length-2 (preserving the XML default's rendered z) or
-    length-3. ``rig_quat`` is MuJoCo's scalar-first ``(w, x, y, z)``.
-    """
+    """Mutate the spec so the rig mesh RENDERS at the requested world pose."""
     import mujoco
 
     target = _find_worldbody_geom(floor_spec, rig_geom_name)
@@ -388,9 +290,6 @@ def _apply_rig_pose_override(
     comp_pos0 = np.asarray(probe_model.geom_pos[pgid], dtype=float)
     comp_quat0 = np.asarray(probe_model.geom_quat[pgid], dtype=float)
     if not np.allclose(spec_quat0, [1.0, 0.0, 0.0, 0.0], atol=1e-8):
-        # Math below assumes the xml-declared geom quat is identity; this is
-        # the case for floor.xml. Generalizing would require unrotating the
-        # auto-center offset by spec_quat0 first.
         raise NotImplementedError(
             f'rig geom {rig_geom_name!r} has non-identity xml quat '
             f'{spec_quat0.tolist()}; mesh auto-center compensation not '
@@ -456,10 +355,6 @@ def build_courtship_pair_visualizer(
     rig_quat: Optional[Sequence[float]] = None,
 ):
     """Compose a floor + two fly bodies (``_fly0`` male, ``_fly1`` female).
-
-    Returns a :class:`mujoco_visualizer.Visualizer` whose ``self.model.nq``
-    equals ``fly_nq * 2`` and whose category buckets are per-fly, so the two
-    fly-specific settings JSONs color each fly independently.
 
     Parameters
     ----------
@@ -530,17 +425,7 @@ def build_courtship_pair_visualizer(
 _ENVELOPE_CACHE: Dict[str, tuple] = {}
 
 def _arena_envelope(recording_dir, pose_dir: str = "pose_v2_20260914") -> tuple:
-    """(y_lo, y_hi, z_hi) Scutellum bounds pooled over a recording's bouts.
-
-    The chamber is long and narrow, so a reconstruction that fails near a wall
-    leaves the arena in y and/or z while staying plausible in x. Pooling every
-    bout-fly in the SAME recording gives a per-recording envelope without
-    assuming absolute coordinates (they differ between recordings).
-
-    `pose_dir` names the pose tree under the recording. It is part of the
-    cache key because one recording directory can hold several pose trees
-    whose envelopes differ.
-    """
+    """(y_lo, y_hi, z_hi) Scutellum bounds pooled over a recording's bouts."""
     key = (str(recording_dir), str(pose_dir))
     if key in _ENVELOPE_CACHE:
         return _ENVELOPE_CACHE[key]
@@ -564,19 +449,7 @@ def _arena_envelope(recording_dir, pose_dir: str = "pose_v2_20260914") -> tuple:
 
 def _outside_arena(recording_dir, bout_name: str, fly_dir: str, n: int,
                    pose_dir: str = "pose_v2_20260914"):
-    """Boolean mask (len n) of frames whose Scutellum leaves the arena envelope.
-
-    Diagnosed on Session1/2026_04_02_16_56_37 bout_00003/fly0, panel G's 0.345
-    outlier: 16% of frames sit beyond the chamber in y AND above the
-    recording's z p99, with conf3d dropping 0.731 -> 0.639 there -- a
-    triangulation failure near a wall, not a real climb. The next-highest
-    bout (0.219) is 0% outside at conf 0.971, so this gate keeps it: it
-    removes the artifact WITHOUT trimming the tail generally.
-
-    `pose_dir` is forwarded to `_arena_envelope` and used for the per-bout
-    kp3d lookup below, so both read the SAME pose tree (see that function's
-    docstring for why the tree can vary per recording).
-    """
+    """Boolean mask (len n) of frames whose Scutellum leaves the arena envelope."""
     ylo, yhi, zhi = _arena_envelope(recording_dir, pose_dir)
     if ylo is None:
         return np.zeros(n, bool)
@@ -615,30 +488,7 @@ def _mean_z_by_label(results: List[dict], label: str,
 
 def analyze_unpaired_males(data, bout_keys, info, pairs, kp_names, *,
                            song_cfg=None, loc_cfg=None, despike=True):
-    """Single-fly analysis for males whose partner has no reconstruction.
-
-    `pair_bouts` only pairs an adjacent (fly0, fly1), so a bout where one fly
-    could not be solved contributes NOTHING -- and every Figure 4 panel derives
-    from `analyze_all_pairs` results, including the ones that need a single fly
-    (wing-angle density, pulse classification, wing phase, z-height). On the
-    2026-08-28 re-run three Session0 bouts came back male-only, because the
-    mask-agreement gate found the female's keypoints unusable for essentially
-    the whole bout (see run_bout.view_mask_agreement / unsolvable.json).
-    Dropping a perfectly good male fit for that reason is a waste.
-
-    This reproduces the SINGLE-FLY half of `utils.courtship_loader.analyze_pair`
-    by calling the same `utils` functions -- utils is consumed unmodified -- and
-    returns dicts with the keys those pooled panels read: `song0`,
-    `male_labels`, `male_valid`, `com_z`, `by_song`, `kin`.
-
-    Only a slot the h5 marks as the MALE (`info['male_fly']`, and only where
-    `sex_verified`) is analysed: the panels are about male song, and guessing
-    the sex of a lone fly is exactly the mistake the wing-song CV metric made.
-
-    Pair-only fields (`song1`, `sex`, `colocated`, `valid_fly1`) are set to
-    None, and `single_fly=True` is set, so a pair-only consumer that is handed
-    one of these breaks loudly instead of silently reading a male as a pair.
-    """
+    """Single-fly analysis for males whose partner has no reconstruction."""
     # (import removed by the port: provided at module level)
     song_cfg = song_cfg or SongAnalysisConfig()
     loc_cfg = loc_cfg or LocomotionConfig()
@@ -662,10 +512,6 @@ def analyze_unpaired_males(data, bout_keys, info, pairs, kp_names, *,
         try:
             kp, xp, q = get_fields(data[key], despike=despike)
             kp = np.asarray(kp, float)
-            # No partner, so no pair-validity mask: a frame counts when this
-            # fly's own keypoints are finite. compute_pair_validity's other
-            # gates (colocation, occlusion by the other fly) are meaningless
-            # for a lone animal and must not be faked.
             valid = np.isfinite(kp).all(axis=tuple(range(1, kp.ndim)))
             song = analyze_fly_song(kp, xp, q, kp_names, cfg=song_cfg,
                                     valid_mask=valid)
@@ -714,27 +560,7 @@ def _pair_qpos(q0: np.ndarray, q1: np.ndarray, n: int) -> np.ndarray:
 
 
 def _free_running_com_z(h5_path) -> np.ndarray:
-    """Per-bout mean scutellum height ABOVE THE FLOOR for a free-running h5.
-
-    ``utils.free_walking_loader.load__scutellum_z`` returns RAW z with no
-    floor subtraction, while the courtship arms (``pulse_z``/``sine_z``,
-    from ``r["com_z"]``) use ``utils.locomotion.compute_com_height``
-    (scutellum z minus the 5th-percentile ground-keypoint z for that bout).
-    Plotting the two together compared different quantities and overstated
-    the courtship-vs-walking height difference roughly 2x (measured: raw
-    free-running mean 0.250 vs floor-corrected 0.147, against courtship's
-    0.127). Use the same estimator for both sides — this is a figbuilder-
-    layer fix (not `utils/`, which is consumed unmodified): a local
-    per-bout floor correction that mirrors `compute_com_height` exactly,
-    using its own default `LocomotionConfig` so the two sides genuinely
-    agree, rather than a single global floor across all bouts (which would
-    reintroduce the same class of error `compute_com_height` exists to
-    avoid — the floor can differ bout to bout).
-
-    Returns the per-bout array, matching the shape
-    ``load__scutellum_z(..., per_bout=True)`` returned so nothing
-    downstream changes. Bouts with no finite `com_z` samples are skipped.
-    """
+    """Per-bout mean scutellum height ABOVE THE FLOOR for a free-running h5."""
     # (import removed by the port: provided at module level)
 
     data = h5_load(str(h5_path))
@@ -764,18 +590,6 @@ def _pair_center_xyz(kp0: np.ndarray, kp1: np.ndarray, scut_idx: int, T: int) ->
     loaded ``(T, n_kp, 3)`` kp3d arrays in the TRUE DLT world frame — feeds
     `panel_video_strip_with_kp`'s `center_xyz`/`crop_wh` auto-centred crop
     instead of a fixed `roi` copied from a different recording (Finding 2:
-    the notebook's SESSION0 crop is the wrong window for a SESSION1
-    recording; a static crop is wrong for every new session).
-
-    Round 6: this used to reach into the combined h5's `kp_data`, which is
-    body-model-RESCALED and RE-CENTERED and is NOT in the DLT world frame
-    (measured: its Scutellum midpoint projects to uv (13.6, 426.6), the
-    frame's bottom-left corner) — feeding it here centred every crop on
-    empty chamber. Callers must now load `kp3d.npz` from the processed pose
-    tree (`pose/bouts/<bout>/fly{0,1}/kp3d.npz`, key `"kp3d"`) and pass
-    those arrays in; this function stays pure and only does the midpoint
-    arithmetic, unit-testable without video/DLT. Clamps to the shorter of
-    the two arrays (and `T`), same as `_pair_qpos`.
     """
     kp0 = np.asarray(kp0, dtype=float)
     kp1 = np.asarray(kp1, dtype=float)
@@ -784,33 +598,14 @@ def _pair_center_xyz(kp0: np.ndarray, kp1: np.ndarray, scut_idx: int, T: int) ->
 
 def _video_frame_indices(T: int, n_video: int, fs: float,
                          span_ms: Optional[float]) -> np.ndarray:
-    """Frame indices for the panel-A video strip.
-
-    The published Figure 4 samples the FIRST 1500 ms (0 / 501 / 1002 /
-    1504 ms), not the whole bout: the courtship beat it illustrates happens
-    early, and spreading four frames over all 2508 ms of bout 28 lands the
-    last one at 2506 ms on a different part of the interaction.
-
-    `span_ms` is clamped to the bout, so a bout shorter than the span still
-    ends on its own last frame instead of indexing past it. `span_ms=None`
-    restores the historical whole-bout sampling.
-    """
+    """Frame indices for the panel-A video strip."""
     last = T - 1
     if span_ms is not None:
         last = min(last, int(round(float(span_ms) / 1000.0 * fs)))
     return np.linspace(0, last, n_video, dtype=int)
 
 def _blend_masks(frame, masks, colors, alpha: float) -> np.ndarray:
-    """Blend translucent per-fly mask tints into an RGB crop.
-
-    The masks stay RASTER on purpose: they are soft, low-frequency fills, so
-    vectorising them would add contour machinery for no visible gain. Only the
-    KEYPOINTS become vector (see `figbuilder.panels.courtship.VideoKpPanel`),
-    because those are the marks that looked like blobs once baked.
-
-    A mask whose shape does not match the crop is SKIPPED rather than
-    broadcast — a silent shape mismatch would tint the wrong pixels.
-    """
+    """Blend translucent per-fly mask tints into an RGB crop."""
     from matplotlib.colors import to_rgb
 
     out = np.asarray(frame, dtype=float).copy()
@@ -825,15 +620,7 @@ def _blend_masks(frame, masks, colors, alpha: float) -> np.ndarray:
 
 def _project_kp_to_crop(kp_xyz, dlt, kp_scale: float, roi, shape,
                         project=None) -> np.ndarray:
-    """Project one frame's keypoints into CROP-LOCAL pixel coordinates.
-
-    Mirrors the projection `panel_video_strip_with_kp` does internally, but
-    returns the coordinates instead of drawing them, so the bundle can carry
-    them and the panel can scatter them as vector marks.
-
-    Keypoints that do not project, or land outside the crop, come back as NaN
-    — the panel drops those rather than drawing a mark at the frame corner.
-    """
+    """Project one frame's keypoints into CROP-LOCAL pixel coordinates."""
     if project is None:
         project = _dlt_project          # defined above in this module
 
@@ -850,24 +637,7 @@ def _project_kp_to_crop(kp_xyz, dlt, kp_scale: float, roi, shape,
 
 def _order_pair_male_first(key0_dir: str, key1_dir: str,
                            male_slot: Optional[int]) -> tuple:
-    """Indices that put the MALE first in the render pair, as ``(i, j)``.
-
-    `build_courtship_pair_visualizer` colours by PAIR POSITION —
-    `VIZ_SETTINGS[0]` (red) is applied to whichever fly is passed first. The
-    z-height panel of this same figure labels Male red and Female blue, so if
-    the pair is passed in its raw key0/key1 order the two panels disagree
-    about which animal is which.
-
-    key0/key1 is the PAIR ordering and tracks neither the fly0/fly1 directory
-    index nor sex — on the published exemplar key0 is the FEMALE, so the raw
-    order painted her red and the male teal, the reverse of the figure's own
-    legend. Resolve by NAME against the dataset's `male_fly`, never by
-    position; this is the same class of trap as the keypoint/camera order
-    bugs in CLAUDE.md.
-
-    With no sexing available, the pair's own order is kept rather than
-    guessed at.
-    """
+    """Indices that put the MALE first in the render pair, as ``(i, j)``."""
     if male_slot is None:
         return (0, 1)
     male_dir = f"fly{int(male_slot)}"
@@ -879,30 +649,7 @@ def _order_pair_male_first(key0_dir: str, key1_dir: str,
 
 def _rig_pos_for_session(data, bout_keys, fly_ids, recording: str,
                          offset=(0.0, 0.0)):
-    """`rig_pos` placing the Happy_house arena on the flies, or None.
-
-    The rig mesh is anchored at the MuJoCo world origin while the flies live
-    in the DLT calibration frame, so without this the arena sits metres away
-    and slabs across the camera instead of reading as the chamber wall the
-    female climbs. `estimate_rig_pose_from_qpos` recovers the chamber's xy
-    centre from the pooled fly root-xy of a session's bouts.
-
-    Returned length-2 ON PURPOSE: that keeps the XML's own z for the rig, as
-    `Courtship_Song_Figures2.ipynb` (cell 8/13) does. Passing a z here instead
-    lifts or sinks the arena relative to the floor plane.
-
-    `offset` is the notebook's RIG_CENTER_OFFSET (cm, world xy): the PCA
-    centre puts the chamber symmetrically around the flies, which leaves a
-    wall between the camera and a female climbing it. Nudging the rig moves
-    that wall behind her so she reads as ON it. Measured on the exemplar's
-    1500 ms frame by sweeping (+-0.2, +-0.4) in x and y and LOOKING: +0.2 in
-    x is the only direction that reveals the reared female against the wall;
-    -0.2 x and both y directions hide her further.
-
-    Restricted to bouts from THIS recording: `data` may merge several h5s,
-    each with its own DLT calibration, and pooling xy across them averages
-    disjoint world frames into a centre that belongs to neither.
-    """
+    """`rig_pos` placing the Happy_house arena on the flies, or None."""
     # (import removed by the port: provided at module level)
 
     base = _recording_base(recording)
@@ -920,16 +667,7 @@ def _rig_pos_for_session(data, bout_keys, fly_ids, recording: str,
     return (cx, cy)
 
 def _snap_to_renderable(want: np.ndarray, ok_idx: np.ndarray) -> np.ndarray:
-    """Snap each desired frame to the nearest one that can actually be drawn.
-
-    The render strip illustrates the SAME moments as the panel-A video strip:
-    a reader compares the two rows frame-for-frame, so independently sampled
-    timepoints invite a comparison that is not being made. But frames whose
-    qpos is NaN cannot be posed, so a requested timepoint that lands on a hole
-    snaps to the nearest renderable neighbour instead of being dropped —
-    keeping the two strips the same length and as close in time as the data
-    allows.
-    """
+    """Snap each desired frame to the nearest one that can actually be drawn."""
     ok_idx = np.asarray(ok_idx)
     if ok_idx.size == 0:
         raise ValueError("no renderable (finite-qpos) frames")
@@ -940,15 +678,7 @@ def _snap_to_renderable(want: np.ndarray, ok_idx: np.ndarray) -> np.ndarray:
     return ok_idx[np.where(take_prev, prev, pos)]
 
 def _recording_base(fly_id: str) -> str:
-    """Strip a fly_id down to the RECORDING id the processed tree uses.
-
-        'Session1/2026_04_02_16_21_32_fly1'            -> 'Session1/2026_04_02_16_21_32'
-        'Session0/2025_10_20_13_20_04/bout00028/fly0'  -> 'Session0/2025_10_20_13_20_04'
-
-    The second (2026-08) form also names the bout, so trailing `flyN` and
-    `boutNNNNN` path segments are dropped before the older `_flyN` suffix
-    strip. `courtship_bout_summary.csv`'s `fly_id` column carries neither.
-    """
+    """Strip a fly_id down to the RECORDING id the processed tree uses."""
     parts = str(fly_id).rstrip("/").split("/")
     while len(parts) > 1 and (parts[-1].startswith("fly")
                               or parts[-1].startswith("bout")):
@@ -956,21 +686,7 @@ def _recording_base(fly_id: str) -> str:
     return "/".join(parts).rsplit("_fly", 1)[0]
 
 def _processed_fly_dir(fly_id: str) -> str:
-    """``'Session1/2026_04_02_16_21_32_fly1'`` -> ``'fly1'``.
-
-    Round 7: the combined h5's key0/key1 ordering is the PAIR ordering and
-    does NOT correspond to the processed tree's fly0/fly1 directory names —
-    verified: for the exemplar, key0=bout_183 has fly_id
-    ``..._fly1`` and key1=bout_182 has fly_id ``..._fly0`` (INVERTED).
-    `analyze_pair`'s `male_id='fly0'` refers to the pair's first element
-    (key0), not to this fly_id suffix. Always derive the directory from the
-    fly_id suffix; never assume key0 -> `fly0` / key1 -> `fly1`.
-    """
-    # Two fly_id shapes are in the wild:
-    #   Old_preds / analysis-v1 : 'Session1/2026_04_02_16_21_32_fly1'  (_flyN suffix)
-    #   analysis v1_2026-08     : 'Session0/2025_10_20_13_20_04/bout00028/fly0'
-    #                             (path-style, and it names the bout too)
-    # Take the last path segment first, then fall back to the '_' split.
+    """``'Session1/2026_04_02_16_21_32_fly1'`` -> ``'fly1'``."""
     tail = fly_id.rstrip("/").rsplit("/", 1)[-1]
     if not tail.startswith("fly"):
         tail = tail.rsplit("_", 1)[-1]
@@ -981,24 +697,6 @@ def _processed_fly_dir(fly_id: str) -> str:
 def _resolve_sam3_camera_index(cameras, calib_dir, cam: str) -> tuple:
     """Return ``(cam_idx, source)`` for `cam` (e.g. ``"Cam2012630"``) against
     a SAM3 mask npz's own camera axis.
-
-    Round 10 finding: SAM3 mask npzs in the PROCESSED tree self-label their
-    camera axis via a ``cameras`` array, in an order that is NOT guaranteed
-    to match ``sorted(glob('Cam*_dlt.csv'))`` — verified on the exemplar's
-    own npz: ``cameras`` puts `Cam2012630` at index 5, while glob-sorted
-    calibration order puts it at index 0. The OLD `Video_recordings` tree's
-    npzs (``['packed','valid','centroids','shape']``, no ``cameras`` array)
-    are the convention `utils/sam3_female_com.py`'s `sam3_camera_index` was
-    written against; the round-6 repoint to the processed tree carried that
-    glob-order assumption forward, silently permuting the camera axis.
-
-    ``cameras`` is the npz's own array (or `None` when absent — the legacy
-    convention, still supported as a fallback). When present, `source` is
-    ``"npz cameras"`` and a `cam` absent from it raises `ValueError` naming
-    what the npz DOES contain (never silently falls back to index 0). When
-    `cameras` is `None`, falls back to `sam3_camera_index` against
-    ``calib_dir``'s glob-sorted order, `source` is ``"glob fallback"`` — the
-    caller should print which path was taken.
     """
     if cameras is not None:
         names = [str(c) for c in cameras]
@@ -1013,29 +711,6 @@ def _slot_to_raw_frame(sync_plan, camera: str, slot: int) -> tuple:
     `camera`. Returns ``(raw_frame, corrected)``; `corrected` is False (and
     `raw_frame == slot`, the pre-fix positional behaviour) when `sync_plan`
     is falsy/`None` or its `status` is not `"reindex"`.
-
-    Round 11 finding A: this recording's own `sync_plan.json` has
-    `status="reindex"` with one interior drop
-    (`Cam2012630: gaps=[{"slot": 21, "lost": 26}]`), long before this
-    exemplar's bout (canonical slot ~380781). Reading raw mp4 position ==
-    canonical slot directly (the pre-fix behaviour, `utils/
-    courtship_figure_panels.py`'s `_read_frame(cap, fidx + video_frame_
-    offset, ...)` does exactly this) silently reads a DIFFERENT real
-    instant than the one the masks/kp3d describe.
-
-    Reuses the repo's OWN canonical slot<->position mapping —
-    `jarvis_jax.predict.frame_sync.SyncCam.pos()`/`.has()` (vendored from
-    JohnsonLabJanelia/cluster_pose's `check_sync.py`; also the engine
-    behind `viz/core/io.py`'s `sync_positions`/`read_frames_synced`) —
-    rather than re-deriving the gap-accumulation arithmetic here, per
-    `SyncCam`'s own docstring: "pos(t) = mp4 frame position that delivers
-    slot t (= count of present frames before t)" — i.e. `pos(t) = t -
-    (frames lost before t)`, confirmed against the pre-existing repo test
-    `third_party/jarvis_jax/tests/test_synced_reader.py::
-    test_slot_positions_maps_around_gap` (gap at slot 41 losing 3: slot 44
-    -> pos 41, `# pos = slot-3`). `SyncCam.has(t)` reports `False` — the
-    camera dropped that exact slot entirely — for a slot inside a gap; this
-    raises `ValueError` rather than silently reading an adjacent frame.
     """
     if not sync_plan or getattr(sync_plan, "status", None) != "reindex":
         return int(slot), False
@@ -1060,45 +735,9 @@ def _resolve_session_bout(session_dir, sam3_root, recording: str, clip_len: int,
     present, else the legacy ``courtship_bout_summary.csv``), but the SAM3
     directory name by SCANNING ``sam3_root`` for the one whose own mask
     frame count matches — never by deriving it from the CSV's ``bout_idx``.
-
-    Returns ``(bout_dir_name, start_frame)``.
-
-    SAM3 bout directory numbering is NOT guaranteed to match the CSV's
-    `bout_idx` — verified on the ``Video_recordings`` SAM3 tree (round 5):
-    CSV bout_idx 5 (n=778, the exemplar) lived in `bout_00004`, while
-    `bout_00005` held CSV bout_idx 6 (n=569); almost certainly parallel
-    SAM3 shards writing their outputs in completion order. The processed
-    tree this function is now pointed at (round 6:
-    `<processed_root>/<recording>/{courtship_bout_summary.csv,sam3_masks}`)
-    verifiably does NOT have this permutation (dir `bout_0000N` <-> CSV
-    `bout_idx N` exactly, for every row) — but matching by mask frame count
-    is kept regardless, since it is correct whether or not the numbering
-    happens to line up, and the first three rows of the round-5 permutation
-    also lined up before row 4 broke it. Do NOT "simplify" this back to a
-    `bout_idx`-derived directory name.
-
-    ``recording`` (e.g. from ``recording_of(ex)``, which reads
-    ``info/fly_ids``) carries a trailing ``_flyN`` suffix that the CSV's
-    ``fly_id`` column never has, so the suffix is stripped before matching
-    and compared by EQUALITY, not substring containment (round-4 fix: the
-    prior ``fly_id`` substring-of-``recording`` check ran backwards — the
-    CSV id is a substring of the suffixed recording id, never the reverse,
-    so it matched zero rows on every real run). A recording id with no
-    ``_fly`` suffix is left unchanged by the strip, so the same code path
-    handles both forms without a conditional.
-
-    Reads ONLY each npz's tiny ``valid`` array (shape ``(2, 7, N)``) to get
-    its frame count ``N`` — never ``packed`` (``(2, 7, N, 448, 242)``);
-    decompressing all of them would be very slow.
     """
     import pandas as pd
 
-    # The MVQ tree has no `courtship_bout_summary.csv`; it carries
-    # `<pose_dir>/bouts_unified_summary.csv` instead, whose rows agree with
-    # the legacy file (bout_idx 1 -> 14045/14557 on Session0) but which has no
-    # `fly_id` column, being already scoped to one recording. The backup tree
-    # still has the legacy file, so both are supported and the error names
-    # both when neither is found.
     candidates = [Path(session_dir) / pose_dir / "bouts_unified_summary.csv",
                   Path(session_dir) / "courtship_bout_summary.csv"]
     csv_path = next((p for p in candidates if p.exists()), None)
@@ -1149,22 +788,6 @@ def _render_frames(flybody_xml, floor_xml, qpos_pair, frame_idx,
     """Bake two-fly courtship-pair MuJoCo frames to uint8 RGB via the styled
     visualizer (`Earthy_V1_courtship_fly0`/`fly1` presets: red fly0, teal
     fly1), floor-aligned.
-
-    `rig_pos` places the Happy_house arena on the flies. It was previously
-    pinned to None because the old `floor_xml` had no such geom; the
-    repo-local `configs/render/floor_happy_house.xml` enables it, and without
-    a rig_pos the mesh stays at the MuJoCo world origin while the flies live
-    in the DLT calibration frame -- the arena then slabs across the camera
-    instead of reading as the chamber wall. Pass the length-2 (x, y) that
-    `_rig_pos_for_session` returns, which keeps the XML's own z. None still
-    works and still renders a bare floor.
-
-    Mirrors panel_render_strip's own `track_midpoint` + `viz.render_frame`
-    path (verified: red fly0, teal fly1, extended wing visible), inlined here
-    to return raw arrays without a matplotlib axes round-trip. When
-    `track_midpoint` (default) a free camera tracks the fly0/fly1 midpoint
-    every frame using `RENDER_CAM`; set it False to use the named `camera`
-    (e.g. a model-defined `track1_fly0`) unmodified instead.
     """
     import mujoco
 

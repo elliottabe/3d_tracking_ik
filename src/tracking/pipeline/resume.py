@@ -1,18 +1,4 @@
-"""Is this stage's work already done?
-
-Spec section 5: "Every stage's output **is** its checkpoint. A stage is skipped
-when its artifact exists *and* its signature matches; a different checkpoint,
-threshold or placement is not the same computation and must not be silently
-reused."
-
-The whole module is that sentence. The trap it guards is cheap to fall into and
-expensive to notice: a changed checkpoint writes the same filenames, so an
-existence check reports "done" and the run mixes two models' outputs with no
-error anywhere.
-
-`fine` already had this mechanism (`detector.fine.fine_gate_string` /
-`bout_is_current`); this generalises it rather than inventing a second scheme.
-"""
+"""Is this stage's work already done?"""
 
 from __future__ import annotations
 
@@ -36,14 +22,7 @@ def read_signature(out_dir, stage: str) -> str | None:
 
 
 def write_signature(out_dir, stage: str, signature: str) -> None:
-    """Record `signature` for `stage`, atomically.
-
-    Atomic because the alternative failure is silent: a half-written signature
-    file is a signature that matches nothing, so the next run redoes the work --
-    which merely wastes time -- but a signature written BEFORE the artifact is
-    complete would make an interrupted stage look current forever. Callers must
-    write this only after the artifacts land.
-    """
+    """Record `signature` for `stage`, atomically."""
     p = _sig_path(Path(out_dir), stage)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(p.suffix + ".tmp")

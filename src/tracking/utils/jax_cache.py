@@ -1,26 +1,4 @@
-"""JAX's persistent compilation cache, on by default for this pipeline.
-
-The IK compiles a large jaxls program: measured on this repo, one solve of an
-8-frame problem costs **72.5 s** in a cold process and **0.13 s** once
-compiled -- a ratio of about 560. Without a persistent cache every process
-pays that again, so a test run, a bout, and a re-run of the same bout each
-re-compile from scratch.
-
-With the cache warm, the same first solve in a NEW process costs **22.9 s**
-instead of 72.5 -- 50 seconds back per process, on a cache shared across
-runs, sessions and machines that see the same shapes.
-
-This is not the whole answer on its own: the offsets fit changes marker site
-positions every outer iteration, and had they stayed jaxpr constants each
-iteration would be a different program with a different cache key. They are
-traced variables instead (`solver.py`'s `OffsetVar`/`FrozenVar`), so one
-compiled program serves the whole fit.
-
-The directory defaults to `$TMPDIR/jax_cache` (falling back to
-`/tmp/<user>/jax_cache`) and is overridden by `TRACKING_JAX_CACHE_DIR`. Set
-it to a shared filesystem path to share compilations across nodes; set it
-empty to disable.
-"""
+"""JAX's persistent compilation cache, on by default for this pipeline."""
 
 from __future__ import annotations
 
@@ -43,13 +21,7 @@ def cache_dir() -> Path | None:
 
 
 def enable() -> Path | None:
-    """Turn on JAX's persistent compilation cache. Idempotent; returns the dir.
-
-    Safe to call before or after `jax` is imported, and a no-op when the cache
-    is disabled or the directory cannot be created -- a cache that cannot be
-    written is a performance problem, never a correctness one, so it must not
-    take a pipeline down.
-    """
+    """Turn on JAX's persistent compilation cache. Idempotent; returns the dir."""
     path = cache_dir()
     if path is None:
         return None

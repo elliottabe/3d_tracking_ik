@@ -1,51 +1,4 @@
-"""The coarse pass: a whole recording at a wide stride, mask-free.
-
-Sweeps a recording at `stride` (default 16), locating each fly with
-CenterDetect + tracked window placement and lifting each window with an
-`MVQRunner` checkpoint, producing the per-fly per-frame arrays
-`write_coarse_tracks` turns into `coarse_tracks.npz` -- the file
-`tracking.detector.gates` reads to gate frame ranges into bouts.
-
-**THE AXIS CONVENTION IS A HARD CONTRACT (CLAUDE.md).** Every per-fly
-per-frame array here -- `exist`, `n_valid_cams`, `wing_angle_deg`, `speed`,
-`height`, `trackable`, `slot`, `centre_source`, `sex_prob` -- is `(F, T)`:
-FLY axis FIRST, then time. `centroid` is `(F, T, 3)`; `kp3d` is
-`(F, T, K, 3)`. `gates` reads the file with `num_animals, n_frames =
-exist.shape`, where a transposed write is SILENT -- it would read T animals
-and F frames and nothing would raise.
-
-**KEYPOINTS BY NAME.** `coarse_features` takes a `kp_order: Order` and looks
-every keypoint up by name (`_kp(kp3d, kp_order, "WingL_base")`) -- never by
-integer, the trap that once turned a middle-left leg into a "collapsed right
-wing vein" (CLAUDE.md).
-
-**PLACEMENT.** Every window is placed by TRACKED placement
-(`tracking_state.TrackedPlacementState`/`plan_windows_tracked`); there is no
-CenterDetect-only-clustering fallback. `no_merge=True` and `placement_lag=8`
-are this module's defaults.
-
-**BATCHING SPANS FRAMES.** `MVQRunner.infer` always pads to `runner.batch`, so
-one window per call would compute `batch` windows and discard all but one.
-Windows accumulate across frames and flush with `_concat_windows` when the
-next frame's would not fit, or when `placement_lag` frames have elapsed since
-the oldest pending frame.
-
-**KEYPOINT ORDER, MODEL VS PIPELINE.** `MVQRunner.infer`/`read_typed` return
-`kp3d` in the CHECKPOINT's order (`runner.model_order`); `runner.to_pipeline`
-is the one place that permutes it. Every `kp3d` stored here has already been
-through it, so `coarse_features`'s by-name lookups are correct.
-
-**CHUNKED RESUME.** `coarse_pass(..., resume_from=...)` continues
-tracked-placement state from a previous result's `last_centroid`/
-`last_centres` and returns the new frames concatenated onto the old, so a
-caller can process a recording in blocks, write each through
-`write_coarse_tracks` as a complete gates-readable file, and feed it back via
-`load_partial` after a restart. A resumed and a single-shot run cover the same
-frames and reuse centres identically, but are NOT byte-identical:
-`write_coarse_tracks` stores `kp3d` as float16, so a chunk that round-tripped
-through disk computes `wing_angle_deg` from the quantised value -- an inherent
-~0.05 mm difference, not a bug.
-"""
+"""The coarse pass: a whole recording at a wide stride, mask-free."""
 
 from __future__ import annotations
 
@@ -80,9 +33,6 @@ from tracking.geometry.rig import CameraRig
 from tracking.io.artifacts import load_npz, save_npz
 from tracking.io.names import Order
 
-# `plan_windows_tracked` is re-exported, not called directly (only via
-# `TrackedPlacementState.plan`), so callers can reason about window placement
-# without knowing it lives in `tracking_state.py`.
 __all__ = [
     "TrackedPlacementState",
     "plan_windows_tracked",
@@ -96,9 +46,6 @@ __all__ = [
     "load_partial",
 ]
 
-# Frame-level (not per-fly) bookkeeping of where THIS frame's centres came
-# from. Purely informational: the placement decision itself is
-# `plan_windows_tracked`'s business, not this value's.
 CENTRE_DETECTED, CENTRE_REUSED, CENTRE_NONE = 0, 1, 2
 
 TRACKABLE_EXIST = 0.5  # typed-slot existence threshold for "this fly is trackable"
@@ -111,14 +58,7 @@ WING_PAIRS = (("WingL_base", "WingL_V13"), ("WingR_base", "WingR_V13"))
 
 
 class FloorPlane(NamedTuple):
-    """`normal . x + offset` = height above the floor, in world units.
-
-    `normal` is a unit vector oriented so a fly's height is POSITIVE (see
-    `fit_floor`). `orientation` records which mechanism picked that sign
-    (`"hint"` when `fit_floor`'s `up_hint` decided it directly, `"skew"`
-    when the bottom-heaviness heuristic did); `skew` is that heuristic's own
-    statistic, recorded even when `up_hint` made the actual decision.
-    """
+    """`normal . x + offset` = height above the floor, in world units."""
 
     normal: np.ndarray
     offset: float
@@ -277,20 +217,6 @@ def coarse_features(tracks: dict, kp_order: Order, *, floor: FloorPlane) -> dict
             canonical order -- `kp3d` must already have been permuted into
             it, e.g. via `MVQRunner.to_pipeline`).
         floor: a `FloorPlane` (see `fit_floor`).
-
-    Returns dict of:
-        dist (N,)             inter-fly 3D centroid distance, units (NaN if F < 2)
-        heading_deg (N,)      angle between the MALE's anterior direction
-            (Abd_tip -> Scutellum) and the male->female vector; 0 = pointed
-            straight at her.
-        speed (F,N)           ||centroid[t] - centroid[t-1]||, units per
-            coarse frame; [:,0] is NaN.
-        wing_angle_deg (F,N)  max over L/R of the angle between the body
-            axis (Scutellum -> Abd_tip) and the wing vector
-            (WingX_base -> WingX_V13); NaN-aware max, so one dropped wing
-            does not erase the other.
-        height (F,N)          centroid height above `floor`, units.
-        trackable (F,N)       exist >= TRACKABLE_EXIST AND a finite centroid.
     """
     kp3d = np.asarray(tracks["kp3d"], np.float64)
     centroid = np.asarray(tracks["centroid"], np.float64)
@@ -507,9 +433,6 @@ def coarse_pass(
     def _plan(t, fidx):
         nonlocal prev_centres, rows, W, H, warned_drop
         if pend and pend[0][0] <= t - lag:
-            # THE LAG: every pending frame at or before t-lag must be read
-            # NOW, since frame t's tracked window may be centred on state
-            # that is only final through t-lag (see the module docstring).
             _read_batch()
         imgs, present = reader(fidx)
         imgs = np.asarray(imgs)
@@ -709,10 +632,6 @@ def write_coarse_tracks(
             warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN slices are normal
             sep2d_med = np.nanmedian(np.where(both, d2, np.nan), axis=-1).astype(np.float32)
 
-    # `features` is `coarse_features`'s output in ordinary use, but a caller
-    # (or a unit test) may supply only the subset it cares about -- everything
-    # here has a well-defined "unknown" default (matching `coarse_features`'s
-    # own all-NaN F<2/N<=1 degenerate cases) rather than requiring the whole set.
     dist = np.asarray(features.get("dist", np.full(n_frames, np.nan)), np.float32)
     arrays: dict[str, np.ndarray] = {
         "coarse_frame": coarse_frame,
@@ -780,14 +699,6 @@ def write_coarse_tracks(
 def load_partial(path, num_animals: int, *, rig: CameraRig, kp_order: Order) -> dict | None:
     """Read a previously written `coarse_tracks(.partial).npz` back into a
     `coarse_pass`-shaped dict so a run can `resume_from` it.
-
-    Returns `None` if `path` does not exist (nothing to resume from). Raises
-    (via `tracking.io.artifacts.load_npz`'s order-stamp check) if the file
-    was written under a different keypoint or camera order -- resuming
-    across a geometry change would silently splice two different runs into
-    one file. `kp3d` widens from the on-disk float16 back to float32 (see
-    the module docstring's note on why a resumed chunk is not byte-identical
-    to a single-shot run).
     """
     path = Path(path)
     if not path.exists():
@@ -820,10 +731,6 @@ def load_partial(path, num_animals: int, *, rig: CameraRig, kp_order: Order) -> 
         "reacquired": _get("reacquired", np.zeros((n_flies, n_frames), bool)),
     }
     tr["last_centres"] = z["last_centres"] if "last_centres" in z else None
-    # The own-window/tracked-placement predecessor across the resume
-    # boundary: the last written frame's per-fly centroid (NaN where that
-    # fly was not read, which simply leaves it untracked on the first frame
-    # back -- same as a fresh recording start).
     tr["last_centroid"] = tr["centroid"][:, -1].copy() if n_frames else None
 
     meta = json.loads(_meta_path(path).read_text()) if _meta_path(path).exists() else {}

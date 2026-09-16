@@ -1,11 +1,4 @@
-"""Self-describing per-bout artifacts, indexed by name.
-
-Every array-bearing file this pipeline writes carries `kp_names`, `cameras`
-where a camera axis exists, and `order_sha`. Every reader verifies them. The
-arrays come back wrapped in `NamedArray`, which refuses an integer index --
-`art.kp3d[4]` is a TypeError, `art.kp3d["EyeL"]` is the supported form, and
-`art.kp3d.values` is the explicit, greppable escape hatch for vectorised maths.
-"""
+"""Self-describing per-bout artifacts, indexed by name."""
 
 from __future__ import annotations
 
@@ -32,11 +25,7 @@ class ArrayNameCollision(ValueError):
 
 
 class NamedArray:
-    """An ndarray with one or more named axes.
-
-    `axes` maps an axis index to the `Order` naming that axis. Indexing takes
-    one name per named axis, in ascending axis order.
-    """
+    """An ndarray with one or more named axes."""
 
     __slots__ = ("_values", "_axes")
 
@@ -126,10 +115,6 @@ def load_npz(path, *, kp: Order, cams: Order | None = None) -> dict[str, Any]:
     require_same(Order(list(z["kp_names"])), kp, what="keypoint")
     stored_cams = [str(c) for c in z["cameras"]]
     stored_order = Order(stored_cams) if stored_cams else None
-    # `cams=None` means "do not check cameras", NOT "this file has none": the
-    # digest is always rebuilt from what the file itself stored, so a
-    # camera-stamped artifact can be read back by a caller that does not care
-    # about the camera axis (coarse_init_centroid reads centroids, not pixels).
     if cams is not None and stored_order is not None:
         require_same(stored_order, cams, what="camera")
     want = order_sha(kp, stored_order)

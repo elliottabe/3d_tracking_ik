@@ -1,24 +1,4 @@
-"""The five filtering stages the pipeline actually enables, as pure functions.
-
-Each stage takes and returns `(T, K, 3)` float64 positions in **0.1 mm world units**
-and reports what it changed; none of them print, and none of them touch the
-caller's confidence array.
-
-Stage order, as the orchestrator runs it:
-
-1. `mask_low_confidence`      -- NaN out detections below a confidence floor
-2. `detect_bone_length_outliers` -- NaN both endpoints of a segment whose
-   length deviates > `threshold_std` robust sigma from its temporal median
-3. `despike_isolated_spikes`  -- replace single-frame velocity reversals with
-   the mean of their neighbours
-4. `interpolate_nan_gaps`     -- PCHIP across interior gaps, bounded linear
-   extrapolation into leading/trailing runs
-5. `savgol_smooth`            -- Savitzky-Golay along time
-
-The stages that the config keeps off (medfilt despike, median-filter
-interpolation, confidence-weighted smoothing, wing-tip identity repair,
-centroid-jump masking) are deliberately not implemented.
-"""
+"""The five filtering stages the pipeline actually enables, as pure functions."""
 
 from __future__ import annotations
 
@@ -44,16 +24,7 @@ def mask_low_confidence(
     kp_names: Sequence[str],
     exclude_patterns: Sequence[str] = (),
 ) -> tuple[np.ndarray, np.ndarray, int]:
-    """NaN out keypoints whose confidence is below `threshold`.
-
-    Keypoints whose name contains one of `exclude_patterns` are never masked --
-    wings, whose detector confidence is chronically low while their positions
-    are the fast signal this pipeline most needs to keep.
-
-    Returns `(kp_masked, bad_mask (T, K), n_excluded)`, where `n_excluded`
-    counts the keypoint-frames that the exclusion patterns spared. The
-    confidence array is only read.
-    """
+    """NaN out keypoints whose confidence is below `threshold`."""
     bad_mask = np.asarray(confidence) < threshold  # (T, K)
 
     n_excluded = 0
@@ -77,21 +48,7 @@ def detect_bone_length_outliers(
     kp_names: Sequence[str] = (),
     exclude_patterns: Sequence[str] = (),
 ) -> tuple[np.ndarray, dict[int, int], int]:
-    """NaN both endpoints of a bone whose length is a robust-sigma outlier.
-
-    A rigid segment's length has to be roughly constant, so a frame where it is
-    not is a mistriangulation on one of its two endpoints -- which one is
-    unknowable from the length alone, so both go. Sigma is MAD-based
-    (`MAD / 0.6745`), and lengths are measured once on the array as it arrives:
-    endpoints NaN'd for one edge do not change another edge's statistics.
-
-    `edges` is `(E, 2)` index pairs into `kp`'s keypoint axis: build them with
-    `tracking.preprocess.filter.skeleton_edges` and `Order.index`, never as
-    literal integers -- an edge table written against the wrong keypoint order
-    measures a leg where a wing was meant and reports it as a perfectly rigid
-    bone. Edges with either endpoint matching `exclude_patterns` are skipped
-    entirely. Returns `(kp_flagged, {edge_index: n_frames}, n_edges_skipped)`.
-    """
+    """NaN both endpoints of a bone whose length is a robust-sigma outlier."""
     kp_flagged = kp.copy()
     report: dict[int, int] = {}
     n_edges_skipped = 0
@@ -143,19 +100,7 @@ def despike_isolated_spikes(
     threshold_factor: float = 10.0,
     max_iterations: int = 1,
 ) -> tuple[np.ndarray, int]:
-    """Replace single-frame velocity reversals with the mean of their neighbours.
-
-    A frame is a spike when the jump in and the jump out both exceed
-    `threshold_factor x median(|diff|)` for that signal AND have opposite signs
-    -- an immediate there-and-back, which no real fly motion produces. The
-    threshold is computed once, from the original signal, so later passes
-    cannot chase their own corrections.
-
-    `max_iterations=1` fixes only true single-frame spikes, which is what keeps
-    male wing song (a genuine fast oscillation) intact; higher values peel
-    multi-frame glitches from the outside in. Works on any array whose first
-    axis is time. Returns `(cleaned, n_frames_replaced)`.
-    """
+    """Replace single-frame velocity reversals with the mean of their neighbours."""
     if arr.ndim == 0 or arr.shape[0] < 3:
         return arr.copy(), 0
 
@@ -206,19 +151,7 @@ def _nan_interp_1d(
     max_edge_extrap: int = 0,
     edge_fit_window: int = 5,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Fill NaN gaps in one 1-D signal; returns `(filled, phantom_mask)`.
-
-    Interior gaps get a monotone PCHIP cubic (C1-smooth, no overshoot between
-    anchors). Leading/trailing runs get bounded *linear extrapolation*: a
-    degree-1 fit on the `edge_fit_window` nearest valid samples, evaluated at up
-    to `max_edge_extrap` frames into the run. Anything past that budget stays
-    NaN rather than becoming an invented position. A signal that is more than
-    half NaN, or has fewer than 4 valid samples, is left alone.
-
-    `phantom_mask` marks every frame that was originally in a leading/trailing
-    NaN run, whether or not extrapolation reached it; interior frames filled by
-    PCHIP are not phantom.
-    """
+    """Fill NaN gaps in one 1-D signal; returns `(filled, phantom_mask)`."""
     T = len(vals)
     phantom_mask = np.zeros(T, dtype=bool)
     nans = np.isnan(vals)
@@ -290,13 +223,7 @@ def interpolate_nan_gaps(
     max_edge_extrap_frames: int = 0,
     edge_fit_window: int = 5,
 ) -> tuple[np.ndarray, np.ndarray, int]:
-    """`_nan_interp_1d` over every coordinate column of a `(T, K, 3)` array.
-
-    Returns `(kp_out, edge_nan_mask (T, K), n_values_filled)`. A frame-keypoint
-    is edge-phantom if ANY of its three coordinates sat in a leading/trailing
-    NaN run -- filled by extrapolation or not, it is not a real observation and
-    downstream validity masks say so.
-    """
+    """`_nan_interp_1d` over every coordinate column of a `(T, K, 3)` array."""
     T, K, _ = kp.shape
     kp_flat = kp.reshape(T, -1).copy()
     phantom_flat = np.zeros(kp_flat.shape, dtype=bool)
@@ -321,11 +248,7 @@ def interpolate_nan_gaps(
 
 
 def savgol_smooth(kp: np.ndarray, window_length: int = 11, polyorder: int = 3) -> np.ndarray:
-    """Savitzky-Golay smoothing along time, skipping columns that still hold NaN.
-
-    The window is forced odd and clipped to the sequence length; a window that
-    ends up no longer than `polyorder` is a no-op rather than an error.
-    """
+    """Savitzky-Golay smoothing along time, skipping columns that still hold NaN."""
     T, K, _ = kp.shape
     if window_length % 2 == 0:
         window_length += 1

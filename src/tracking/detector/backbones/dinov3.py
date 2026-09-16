@@ -1,13 +1,4 @@
-"""DINOv3 ViT (patch 16, RoPE, registers, LayerScale) in Flax NNX.
-
-Adapted from jax-ml/bonsai `bonsai/models/dinov3/{modeling,params}.py`
-(Copyright 2026 The JAX Authors, Apache-2.0), with three changes for this
-repo: NHWC input, patch-tokens-only default output, and a generic
-safetensors loader that mirrors the HuggingFace `DINOv3ViTModel` key layout
-(module attribute names below are chosen to MATCH those keys, so the loader
-needs no regex table). RoPE is applied in bf16 exactly as the reference does,
-which is where the ~2e-3 parity tolerance comes from.
-"""
+"""DINOv3 ViT (patch 16, RoPE, registers, LayerScale) in Flax NNX."""
 
 from __future__ import annotations
 
@@ -37,11 +28,6 @@ class DINOv3Config:
     layer_norm_eps: float = 1e-5
     in_ch: int = 3
     rope_dtype: str = "bfloat16"
-    # "xla" (default; the explicit fp32-softmax path below) or "cudnn" (the
-    # flash-attention path in mvq/attention.py -- no `key_valid` mask, since
-    # no camera ever invalidates a backbone patch token; the only "invalid"
-    # position is attention.py's own even-length pad, which it excludes
-    # exactly via `key_value_seq_lengths`, not by leaving it unmasked).
     attn_impl: str = "xla"
 
     def __post_init__(self):
@@ -62,9 +48,7 @@ class DINOv3Config:
 
 
 def rope_cos_sin(h: int, w: int, head_dim: int, base: float):
-    """Axial 2D RoPE tables for an h x w patch grid: (h*w, head_dim) each.
-    Coordinates are pixel-centre aligned and normalised per axis to [-1, 1]
-    ("separate" normalisation, the DINOv3 default)."""
+    """Axial 2D RoPE tables for an h x w patch grid: (h*w, head_dim) each."""
     ch = (jnp.arange(0.5, h, dtype=jnp.float32) / h) * 2.0 - 1.0
     cw = (jnp.arange(0.5, w, dtype=jnp.float32) / w) * 2.0 - 1.0
     coords = jnp.stack(jnp.meshgrid(ch, cw, indexing="ij"), axis=-1).reshape(-1, 2)  # (HW,2)
@@ -250,13 +234,6 @@ def load_dinov3_safetensors(model: DINOv3, ckpt_dir: str) -> DINOv3:
     for f in files:
         for key, val in load_file(f).items():
             parts = key.split(".")
-            # Some `transformers` releases wrap the encoder ModuleList in an
-            # internal `self.model` attribute, so `nn.Module.state_dict()`
-            # emits `model.layer.N....` even though the *published* safetensors
-            # checkpoint (verified via `huggingface_hub.get_safetensors_metadata`
-            # on facebook/dinov3-vitb16-pretrain-lvd1689m) has no such prefix and
-            # our module tree has no top-level `model` attribute either. Strip
-            # it so both the real checkpoint and this in-memory state_dict load.
             if parts[0] == "model" and len(parts) > 1:
                 parts = parts[1:]
             leaf = parts[-1]

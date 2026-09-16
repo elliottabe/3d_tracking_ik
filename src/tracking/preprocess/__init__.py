@@ -1,10 +1,4 @@
-"""Cleaning that runs between triangulation and the IK solve.
-
-One meaning of "public": this package re-exports exactly the union of the four
-modules' own `__all__`, so `tracking.preprocess.X` exists for every X a module
-calls public. It used to drop four of `scale.__all__`'s constants, which made
-"public" mean one thing at the module level and another here.
-"""
+"""Cleaning that runs between triangulation and the IK solve."""
 
 from tracking.preprocess.filter import (
     DEFAULT_FILTER_CFG,

@@ -1,32 +1,5 @@
 """Are the fitted WINGS right? Marker residual cannot answer this.
 
-The wings carry the courtship song, so they are the part of the fit that
-matters most and the part least constrained by the markers. Each wing has only
-three keypoints (`base`, `V12`, `V13`) and they are nearly COLLINEAR, so
-rotation about the wing's long axis -- the blade pitch -- barely moves them.
-This project has already measured that: wing pitch is ~99.6% of the marker
-Jacobian's null direction (per-column sensitivity yaw 0.271 / roll 0.344 /
-pitch 0.042). A wing can therefore be rotated badly wrong while every marker
-residual stays small, which is exactly why this needs its own figure.
-
-**What this should show if the wings are fitted well:**
-
-  1. Wing marker residuals comparable to the body's, with no systematic
-     left/right asymmetry. An asymmetry means one wing is being fitted and the
-     other is drifting.
-  2. Wing VEIN lengths (base->V12, V12->V13, base->V13) matching the observed
-     ones. A fitted vein much shorter than observed is the classic collapsed
-     wing -- the blade seen edge-on -- and it is the failure a residual check
-     misses, because a collapsed pair is SMOOTHER than a real landmark.
-  3. The three wing DOFs moving over time rather than pinned. Yaw carries the
-     song, so on a courting male it must vary. Pitch sitting exactly at its
-     spring rest (-57.3 deg) across the whole clip means the solver never found
-     it and left it where it started.
-  4. Few frames stuck at a joint limit. NOTE: `wing_yaw`'s spring rest IS its
-     joint stop (+85.9 deg), so yaw resting at the stop is the folded-wing pose
-     and NOT a defect -- this panel must be read with that in mind, and it is
-     why the rest pose is drawn alongside the limits.
-
 Usage:
     python scripts/viz/wing_check.py --fly 1 --out figures/<date>-wing-check
 """
@@ -163,9 +136,6 @@ def main():
     ax.set_title("wing DOFs -- pitch pinned at rest means the solver never found it")
     ax.legend(fontsize=7, ncol=2)
 
-    # The song is a ~190 Hz oscillation sampled at 800 Hz, so it is ~4 frames a
-    # cycle and completely illegible across 500. Inset 60 frames so the
-    # wingbeat is actually visible rather than a solid band.
     inset = ax.inset_axes([0.52, 0.06, 0.46, 0.38])
     lo, hi = len(qpos) // 2, len(qpos) // 2 + 60
     for side, style in (("left", "-"), ("right", "--")):

@@ -1,43 +1,5 @@
 """Compare two `stac_ik.h5` solves of the same bout-fly: what is reproducible?
 
-Run it on a reference artifact and a re-run of the same input. It answers one
-question the per-frame IK's acceptance gate depends on: **is a disagreement
-between two solves diffuse or bimodal?**
-
-Expectation, if the solve is deterministic and the only instability is the
-Viterbi tie-break between near-equal candidate poses:
-
-  1. the per-frame max |dqpos| histogram is BIMODAL -- a spike at exactly 0.0
-     holding the large majority of frames, and a second lobe around 1 radian;
-
-REFUTED 2026-09-12: that
-expectation does not hold even for the SOURCE against its own artifact --
-2/1993 bit-identical, same-candidate frames reaching 0.52 rad, the non-zero
-lobe continuous over seven decades. The solve is bit-reproducible run to run
-WITHIN one environment (512/512 at exactly 0.0, same process and across
-processes); it is the COMPILATION that does not carry across, so the artifact
-is a frozen sample rather than a reproducible target. The panel titles below
-are computed from the data for exactly this reason.
-  2. every frame in the second lobe is one where `ik_start_idx` disagrees, and
-     no frame with agreeing `ik_start_idx` is anywhere but the zero spike;
-  3. on the disagreeing frames the two runs' CHOSEN marker costs are equal to
-     about three significant figures, and neither run wins more than ~60% of
-     them -- that is what "near-equal basins" means quantitatively;
-  4. the disagreeing DOFs are the wing pitch/yaw pair, not the legs or root.
-
-Observed on the first run and NOT predicted: on Session0 bout 28 fly0 the
-flipped frames are not spread through the bout -- all 67 fall in roughly
-frames 1850-2000, the same end-of-bout window where the keypoint filter
-manufactures impossible leg segments (frames 1873-1989). Two independent
-instabilities in the same 7% of the bout is more likely one bad stretch of
-input than a
-coincidence, and the filter finding is the upstream candidate.
-
-A DIFFUSE difference instead -- small non-zero deltas spread across all frames
-and all DOFs -- would mean the solve itself is not reproducible, and no exact
-parity gate would be available at any tolerance. That is the finding this plot
-exists to distinguish, and the two look nothing alike.
-
 Usage:
     python scripts/viz/ik_determinism_check.py --a REF.h5 --b RERUN.h5 \
         --out figures/<date>-ik-determinism
@@ -105,12 +67,6 @@ def main():
 
     fig, ax = plt.subplots(1, 3, figsize=(16, 4.6))
 
-    # 1. the bimodality itself.
-    #    Deliberately CATEGORICAL, not a histogram on a symlog axis: "exactly
-    #    0.0" has no position on a log scale, and a bar given a width there
-    #    spans several decades of a quantity the data never takes -- it reads
-    #    as "differences up to 0.1" when every one of those frames is exact.
-    #    Panel 2 carries the distribution of the non-zero lobe.
     pf = c["per_frame"][solved]
     zero = int((pf == 0.0).sum())
     nz = pf[pf > 0]
@@ -121,11 +77,6 @@ def main():
     ax[0].set_ylabel("frames")
     span = f"{nz.min():.2g} – {nz.max():.2g} rad" if nz.size else "none"
     ax[0].set_xlabel(f"per-frame max |Δqpos|          non-zero lobe spans {span}")
-    # The title is an argument, so it is COMPUTED, not asserted. The original
-    # read "Reproducibility is bimodal" unconditionally; re-running the source
-    # against its own artifact on 2026-09-12 gives 2/1993 bit-identical and a
-    # non-zero lobe spanning seven decades, which is the opposite finding, and
-    # a hardcoded title would have narrated it as agreement.
     bimodal = zero > 0.5 * solved.sum()
     decades = np.log10(nz.max() / nz.min()) if nz.size else 0.0
     ax[0].set_title(
@@ -153,10 +104,6 @@ def main():
     ax[1].set_yscale("symlog", linthresh=1e-6)
     ax[1].set_xlabel("frame")
     ax[1].set_ylabel("max |Δqpos|")
-    # Also computed: "every difference is a candidate flip" is TRUE only when
-    # the same-candidate frames are all exactly 0. When they are not, the
-    # spread on the green points is the finding, and saying so is the whole
-    # point of the panel.
     agree_max = float(np.nanmax(c["per_frame"][agree])) if agree.sum() else 0.0
     ax[1].set_title(
         "Every difference is a candidate flip"

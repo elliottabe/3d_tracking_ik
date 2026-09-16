@@ -1,11 +1,4 @@
-"""Affine (telecentric) camera geometry for the multi-view query model.
-
-Every calibration in this pipeline has projection row 3 == [0,0,0,1]
-(`tracking/affine_camera.py`), so projection is uv = M X + t with no camera
-centre. Everything here is linear, which makes reprojection losses and the
-geometric augmentations exact. Coordinates: X is ROI-LOCAL (world minus
-center3D, world units); uv is CROP pixels (full-frame minus crop origin).
-"""
+"""Affine (telecentric) camera geometry for the multi-view query model."""
 
 from __future__ import annotations
 

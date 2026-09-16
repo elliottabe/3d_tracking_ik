@@ -1,11 +1,5 @@
 """Decode-side top-2 peak extraction and pixel-space bookkeeping for
 CenterDetect (multi-animal, single output channel).
-
-Pure numpy/PIL -- no jax dependency, so this is unit-testable on synthetic
-heatmaps and frames with no checkpoint.
-
-Every pixel here is FULL-IMAGE px (not heatmap px, not crop px) unless
-named otherwise -- see CLAUDE.md on labelling with real names and units.
 """
 
 from __future__ import annotations
@@ -21,13 +15,7 @@ IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
 
 def extract_top_k_peaks(heatmap, *, k: int = 2, suppression_radius: int = 15):
-    """(B,H,W) or (B,H,W,1) heatmap -> (peaks_xy (B,k,2), conf (B,k)).
-
-    Iterative NMS: take the global argmax, record it, zero out a disk of
-    radius `suppression_radius` around it, repeat `k` times. No confidence
-    threshold anywhere in this function -- callers apply their own threshold
-    to the returned `conf`.
-    """
+    """(B,H,W) or (B,H,W,1) heatmap -> (peaks_xy (B,k,2), conf (B,k))."""
     hm = np.asarray(heatmap)
     if hm.ndim == 4:
         if hm.shape[-1] != 1:
@@ -99,14 +87,6 @@ def peaks_from_heatmap(hm, img_w: int, img_h: int, min_score: float = 0.2):
 
 def preprocess(frame: np.ndarray) -> np.ndarray:
     """One full RGB frame -> the 320x320 CenterDetect model input.
-
-    Resizes with PIL `Image.BILINEAR` -- NOT `cv2.resize(...,
-    INTER_LINEAR)` -- because that is what training-time preprocessing
-    uses. PIL's resize is antialiased (a proper low-pass box/tent filter
-    before subsampling); cv2's `INTER_LINEAR` point-samples with no
-    antialiasing, which at this dataset's ~6x horizontal squash is not
-    cosmetic (measured mean |delta| of 11/255 between the two resized
-    images) -- a train/inference preprocessing mismatch, not an index bug.
 
     Args:
         frame: (H, W, 3) uint8 RGB.

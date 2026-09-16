@@ -1,11 +1,4 @@
-"""Bout tables: a shared `BoutSpec` for hand-supplied and coarse-pass-derived bouts.
-
-A "bout" is a labelled frame range of a multi-camera recording. Bouts can come
-from a hand-supplied ``bout_summary.csv`` (per-recording, optionally with a
-``fly_id`` column when there is one CSV per fly) or from a table written by a
-coarse tracking / gating pass. Both routes produce the same
-``BoutSpec`` so nothing downstream needs to know which one was used.
-"""
+"""Bout tables: a shared `BoutSpec` for hand-supplied and coarse-pass-derived bouts."""
 
 from __future__ import annotations
 
@@ -19,27 +12,12 @@ import numpy as np
 
 _BOUT_ALIASES = {"bout", "bout_idx"}
 
-# CSV-serializable BoutSpec fields, in column order -- `init_centroid` is
-# deliberately excluded (see BoutSpec's docstring): it is an in-memory seed,
-# not something a bout table on disk carries.
 _CSV_FIELDS = ("idx", "start_frame", "end_frame", "n_frames", "source")
 
 
 @dataclass(frozen=True)
 class BoutSpec:
-    """One bout for a pass to process.
-
-    `init_centroid` is the `(F, 3)` world-unit seed for each fly's track,
-    taken from the coarse pass's centroid at or near `start_frame`
-    (`tracking.detector.fine.coarse_init_centroid`). It is NOT optional
-    plumbing: a fine-track run seeded this way follows each fly from its
-    coarse-pass position rather than re-acquiring it with CenterDetect, and
-    a bout lifted one way is not numerically the same as one lifted the
-    other -- the reference pipeline run always seeds bouts this way.
-    `None` means "let CenterDetect acquire both flies on the bout's first
-    frames" -- the legitimate bout-summary route, and the only one wired up
-    when no coarse track is available.
-    """
+    """One bout for a pass to process."""
 
     idx: int
     start_frame: int
@@ -68,11 +46,7 @@ def _get_bout_idx(row: dict[str, str], lower: dict[str, str]) -> int:
 
 
 def _fly_id_matches(fly_id: str, session_tag: str) -> bool:
-    """`session_tag` at a `/` component boundary of `fly_id`, boundary-terminated.
-
-    See `read_bout_summary` for why both the leading-component allowance and
-    the trailing boundary are required.
-    """
+    """`session_tag` at a `/` component boundary of `fly_id`, boundary-terminated."""
     parts = fly_id.split("/")
     for i in range(len(parts)):
         candidate = "/".join(parts[i:])
@@ -86,30 +60,7 @@ def _fly_id_matches(fly_id: str, session_tag: str) -> bool:
 
 
 def read_bout_summary(path: str | Path, *, session_tag: str | None = None) -> list[BoutSpec]:
-    """Read a hand-supplied bout_summary CSV, stamping ``source="summary"``.
-
-    Columns are read case-insensitively; the bout-id column may be named
-    ``bout`` or ``bout_idx``. ``n_frames`` is derived from
-    ``end_frame - start_frame + 1`` when absent, and verified (raising on
-    disagreement) when present. When a ``fly_id`` column is present, rows are
-    filtered to those whose ``fly_id`` matches ``session_tag``; a CSV with no
-    ``fly_id`` column keeps every row (correct for a per-recording file).
-
-    A match is the tag, then a ``_`` or ``/`` boundary or end-of-string,
-    starting at ANY ``/`` component boundary of ``fly_id``. Both halves of
-    that are load-bearing:
-
-    * The trailing boundary stops a tag ending ``..._13_20_04`` from matching
-      ``..._13_20_040_fly1`` -- a digit-prefix collision that would silently
-      attribute one recording's bouts to another.
-    * Allowing a LEADING component is what reads the curated Session1
-      summaries, whose ``fly_id`` carries a date folder above the session:
-      ``04022026/Session1/2026_04_02_11_52_43_fly0``. Anchoring at position 0
-      matched none of their rows, so every one of those 12 recordings parsed
-      to zero bouts. Matching only at a ``/`` boundary (never mid-component)
-      keeps ``Session1/...`` from matching a ``xSession1/...``, so this is
-      strictly narrower than a substring test.
-    """
+    """Read a hand-supplied bout_summary CSV, stamping ``source="summary"``."""
     rows = _read_rows(path)
     bouts: list[BoutSpec] = []
     for row in rows:
@@ -181,11 +132,7 @@ def write_bouts_csv(path: str | Path, bouts: Sequence[BoutSpec]) -> None:
 
 
 def select(bouts: Sequence[BoutSpec], ids: Sequence[int] | None) -> list[BoutSpec]:
-    """Return the bouts whose `idx` is in `ids`; `None`/empty `ids` returns all.
-
-    Raises naming any id in `ids` absent from `bouts`, so a typo'd bout id
-    does not silently process nothing.
-    """
+    """Return the bouts whose `idx` is in `ids`; `None`/empty `ids` returns all."""
     if not ids:
         return list(bouts)
     by_idx = {b.idx: b for b in bouts}

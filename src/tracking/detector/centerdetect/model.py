@@ -1,22 +1,6 @@
 """CenterDetect network: EfficientNet-b1 (InstanceNorm) backbone + BiFPN +
 detection head, at JARVIS's `model_size="medium"` config
 (`num_joints=1, in_channels=3`).
-
-The backbone is the InstanceNorm variant, NOT the standard torchvision
-BatchNorm EfficientNet-b3 used elsewhere in this repo's backbone comparisons
--- a different backbone for a different model. Scoped to exactly the
-configuration the real checkpoint (`cd_focal_bg30/ckpt/epoch_004`) uses,
-verified against its own Orbax metadata: 11 backbone blocks (stages 1-5 of
-the b0 block-args table at width/depth coefficient 1.0, truncated at the P5
-tap), `se_reduce`/`se_expand` naming, 4 BiFPN cells,
-`conv_channel_coef=(24, 40, 112)`.
-
-CHECKPOINT CONTRACT: this module is restored by Orbax, which matches
-weights by pytree path. Do not rename any class, any `self.<attr> =
-<Module>(...)` attribute, or any `nnx.Param` -- a rename silently leaves
-that subtree on randomly-initialised weights.
-
-Tensors are NHWC throughout (JAX convention).
 """
 
 from __future__ import annotations
@@ -33,9 +17,6 @@ CENTERDETECT_MODEL_SIZE = "medium"
 CENTERDETECT_NUM_JOINTS = 1
 CENTERDETECT_IN_CHANNELS = 3
 
-# JARVIS's own (backbone_width, backbone_depth) for model_size="medium" --
-# efficientnet-b1 in JARVIS's shifted `efficientnet_params()` table (see
-# `_MODEL_SIZE_TABLE`).
 _BACKBONE_WIDTH = 1.0
 _BACKBONE_DEPTH = 1.0
 
@@ -48,11 +29,7 @@ _CONV_CHANNEL_COEF = (24, 40, 112)
 
 
 def instance_norm(x: jnp.ndarray, eps: float = 1e-5) -> jnp.ndarray:
-    """Param-free InstanceNorm2d (affine=False, track_running_stats=False).
-
-    x: NHWC. Mean/var computed per-sample per-channel over the H,W axes
-    (biased variance, matching PyTorch's InstanceNorm2d).
-    """
+    """Param-free InstanceNorm2d (affine=False, track_running_stats=False)."""
     mean = jnp.mean(x, axis=(1, 2), keepdims=True)
     var = jnp.var(x, axis=(1, 2), keepdims=True)
     return (x - mean) / jnp.sqrt(var + eps)
@@ -684,9 +661,6 @@ def restore_centerdetect(ckpt_dir):
     """Restore a CenterDetect `EfficientTrack(num_joints=1, in_channels=3)`
     checkpoint. eval_shape -> replicated-sharding ShapeDtypeStruct targets ->
     Orbax StandardCheckpointer restore -> nnx.merge.
-
-    Kept import-lazy (jax/orbax/flax) so this module imports on a CPU-only
-    test box with no checkpoint present.
     """
     import orbax.checkpoint as ocp
     from jax.sharding import Mesh, NamedSharding
@@ -710,15 +684,7 @@ def restore_centerdetect(ckpt_dir):
 
 
 def jit_centerdetect_forward(model):
-    """A restored CenterDetect nnx module -> a jitted `x -> heatmap` closure.
-
-    `nnx.split`/`nnx.merge` makes an nnx module jit-compatible: the graphdef
-    is a static Python object closed over, the state is the traced argument.
-    `state` is bound with `functools.partial` (rather than closed over)
-    solely so the compiled function stays inspectable; built ONCE per
-    `CenterDetector` instance, never per call, so repeated calls hit the
-    jax dispatch-cache instead of re-tracing.
-    """
+    """A restored CenterDetect nnx module -> a jitted `x -> heatmap` closure."""
     import functools
 
     gdef, state = nnx.split(model)

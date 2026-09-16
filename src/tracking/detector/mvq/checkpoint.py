@@ -1,21 +1,4 @@
-"""Load an mvq checkpoint into a fresh `MVQModel` -- a TOLERANT restore.
-
-Two properties are load-bearing and both are deliberate:
-
-  * device-count-independent REPLICATED sharding
-    (`replicated_abstract_tree`), so a checkpoint saved on N GPUs restores on
-    1 GPU or on CPU without Orbax's "Topology mismatch detected";
-  * an explicit `_CKPT_ITEM_HANDLERS` per item for the `ckpt/<step>` route --
-    without one, Orbax's `item_metadata(step)` returns `None` for every item
-    and warns instead of restoring.
-
-The restore target is built from the CHECKPOINT's own stored tree shapes,
-then merged onto a freshly built model BY PATH AND SHAPE
-(`merge_state_by_path`) -- not the other way around. Building the target from
-the fresh model instead raises the moment the checkpoint's architecture
-differs even slightly (a leaf added since, an instance-slot count changed),
-which is routine across training runs of the same model family.
-"""
+"""Load an mvq checkpoint into a fresh `MVQModel` -- a TOLERANT restore."""
 
 from __future__ import annotations
 
@@ -32,35 +15,17 @@ from jax.sharding import PartitionSpec as P
 
 from tracking.detector.mvq.model import MVQConfig, MVQModel
 
-# Orbax needs an explicit handler per item to answer `item_metadata(step)`
-# (without one it warns "could not be restored" and returns None for every
-# item) -- see `load_mvq_model`'s `ckpt/` branch, which reads the
-# checkpoint's OWN tree shapes from that metadata.
 _CKPT_ITEM_HANDLERS = {
     "model": ocp.StandardCheckpointHandler(),
     "ema": ocp.StandardCheckpointHandler(),
     "ema_meta": ocp.JsonCheckpointHandler(),
 }
 
-# Files whose bytes identify a checkpoint, hashed in this order by
-# `checkpoint_sha256`. `_METADATA` pins the parameter TREE (paths and shapes
-# -- a different architecture is a different checkpoint) and
-# `_CHECKPOINT_METADATA` carries orbax's commit timestamp, so retraining a
-# run at the SAME path with the SAME architecture still moves the signature.
-# `ckpt/<step>/` keeps its tree metadata one level down, under `model/`.
 _DIGEST_FILES = ("_CHECKPOINT_METADATA", "_METADATA", os.path.join("model", "_METADATA"))
 
 
 def resolved_step(step):
-    """`step` as a CONCRETE int, or None for a `final/` dir.
-
-    `"latest"` is refused by name: it is not a checkpoint identity -- it
-    names a different step every time the training job saves -- so a gate
-    signature built from it would compare EQUAL to an artifact produced by
-    different weights, which is the exact failure the signature exists to
-    catch. `MVQRunner` resolves it once at construction and stores the
-    concrete int.
-    """
+    """`step` as a CONCRETE int, or None for a `final/` dir."""
     if step is None:
         return None
     try:
@@ -74,22 +39,13 @@ def resolved_step(step):
 
 
 def checkpoint_dir(checkpoint, step=None):
-    """The directory a `(checkpoint, step)` pair actually loads from.
-
-    `step is None`: `checkpoint` IS a `final/` dir. Otherwise it is the RUN
-    dir and the weights live in `<run>/ckpt/<step>`.
-    """
+    """The directory a `(checkpoint, step)` pair actually loads from."""
     step = resolved_step(step)
     return str(checkpoint) if step is None else os.path.join(str(checkpoint), "ckpt", str(step))
 
 
 def checkpoint_sha256(checkpoint, step=None, *, n=16):
-    """First `n` hex chars of sha256 over the checkpoint's metadata files.
-
-    Hashing the parameter shards themselves would be gigabytes per call; the
-    metadata is a few hundred KB and moves whenever the tree or the save
-    does.
-    """
+    """First `n` hex chars of sha256 over the checkpoint's metadata files."""
     import hashlib
 
     d = checkpoint_dir(checkpoint, step)
@@ -113,8 +69,7 @@ def checkpoint_sha256(checkpoint, step=None, *, n=16):
 def _keypath_to_name(path_or_key):
     """Normalise a `jax.tree_util.keystr(...)` path (or a raw path tuple) to
     plain `a/b/c` form, e.g. `"['decoder']['e_inst']"` -> `"decoder/e_inst"`.
-    Handles both dict keys (`['layer']`, quoted) and list/sequence indices
-    (`[0]`, unquoted)."""
+    """
     key = path_or_key if isinstance(path_or_key, str) else jax.tree_util.keystr(path_or_key)
     key = key.replace("'", "").replace("][", "/").replace("[", "/").replace("]", "")
     return key.strip("/")
@@ -123,15 +78,6 @@ def _keypath_to_name(path_or_key):
 def replicated_abstract_tree(meta_tree):
     """ShapeDtypeStruct twin of an Orbax METADATA tree, replicated over every
     currently-visible device.
-
-    Two properties matter and both are deliberate:
-      - the shapes/dtypes come from the CHECKPOINT, not from any live model,
-        so a checkpoint whose architecture differs from the current code's
-        can be read at all;
-      - the sharding is REPLICATED rather than the checkpoint's own, which
-        raises "Topology mismatch detected" the moment the current process's
-        device count differs from the training run's.
-    Non-array metadata entries pass through untouched.
     """
     repl = NamedSharding(Mesh(jax.devices(), axis_names=("data",)), P())
 
@@ -161,15 +107,6 @@ def merge_state_by_path(model, restored_tree):
     leading rows, and everything else keeps `model`'s own (fresh-init, or
     previously-merged) value. Returns the new model and the list of leaves
     NOT fully restored (human-readable paths) -- the caller reports them.
-
-    The two trees being compared flatten to DIFFERENT key spellings: `pure`
-    (from `nnx.to_pure_dict` on the live `model`'s split state) has paths
-    like `['decoder']['e_inst']`, while the restored State (each leaf a
-    `VariableState` with its own `.value`) flattens with a trailing
-    `['value']`. Both are normalised to plain `a/b/c` form here, and that
-    trailing `/value` segment is stripped before the two are matched by
-    name, or every lookup would silently miss and every leaf would report
-    itself skipped.
     """
     gdef, state = nnx.split(model)
     pure = nnx.to_pure_dict(state)
@@ -215,40 +152,7 @@ def _report_unrestored(what, skipped):
 
 
 def load_mvq_model(run_dir_or_final, *, step=None, attn_impl=None):
-    """Load an mvq checkpoint into a fresh `MVQModel` -- returns `(model, meta)`.
-
-    `step is None` (default): `run_dir_or_final` IS a `final/` directory --
-    the EMA the training run already debiased before saving it there, so
-    this restores it directly, no further debiasing needed.
-
-    `step` given (an int step, or `"latest"`): `run_dir_or_final` is the RUN
-    directory instead (the parent of `final/` and `ckpt/`) -- restores the
-    RAW EMA running sum plus the live model's non-Param state from
-    `<run_dir>/ckpt/<step>` (an `orbax.CheckpointManager` with items
-    `model`/`opt`/`ema`/`ema_meta`), then debiases the EMA by
-    `1 - decay**ema_updates`. `decay` is read from the run's
-    `mvq_run.json`'s `train.ema` when that file and key exist; it defaults
-    to 0.999 otherwise.
-
-    `mvq_run.json` is REQUIRED either way for the model architecture
-    (`MVQConfig`). When `step` is given, this loader looks in
-    `<run_dir>/mvq_run.json` FIRST and falls back to
-    `<run_dir>/final/mvq_run.json` for an older run directory that only
-    ever wrote the `final/` copy.
-
-    `attn_impl`: override the config's own `attn_impl` after loading (e.g. a
-    "cudnn" GPU training run evaluated on a CPU host, which has no cuDNN
-    flash-attention kernel -- pass `attn_impl="xla"`).
-
-    TOLERANT restore (both branches): the restore target is built from the
-    CHECKPOINT's own stored tree and merged onto a freshly built model by
-    path and shape (`merge_state_by_path`) -- so a checkpoint whose leaf
-    count or instance-slot count differs slightly from today's model still
-    loads, rather than raising outright. Leaves that could not be restored
-    keep their fresh init, are printed to stderr (`_report_unrestored`), and
-    are returned in `meta["_unrestored_leaves"]` so a caller can refuse to
-    report a metric that depends on an unrestored head.
-    """
+    """Load an mvq checkpoint into a fresh `MVQModel` -- returns `(model, meta)`."""
     final_dir = run_dir_or_final if step is None else os.path.join(run_dir_or_final, "final")
     if step is None:
         meta_path = os.path.join(final_dir, "mvq_run.json")
@@ -265,9 +169,6 @@ def load_mvq_model(run_dir_or_final, *, step=None, attn_impl=None):
     if attn_impl is not None:
         cfg_kwargs["attn_impl"] = attn_impl
     cfg = MVQConfig(**cfg_kwargs)
-    # A REAL (not eval_shape) init: `merge_state_by_path` keeps this model's
-    # own values for any leaf the checkpoint does not carry, so they have to
-    # exist.
     model = MVQModel(cfg, rngs=nnx.Rngs(0))
 
     if step is None:
@@ -302,10 +203,6 @@ def load_mvq_model(run_dir_or_final, *, step=None, attn_impl=None):
     t = int(r["ema_meta"]["ema_updates"])
     correction = 1.0 - decay**t if t > 0 else 1.0
     ema_params = jax.tree_util.tree_map(lambda e: e / correction, r["ema"])
-    # The debiased EMA overwrites the params it carries; every other leaf
-    # (non-Param state, and anything the EMA predates) keeps what the
-    # `model` item just restored -- the tolerant generalisation of
-    # `nnx.update`.
     model, skipped_ema = merge_state_by_path(model, ema_params)
     meta["_unrestored_leaves"] = _report_unrestored(f"load {ckpt_dir}/{use_step} (model)", skipped)
     _report_unrestored(

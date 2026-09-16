@@ -1,20 +1,4 @@
-"""Model forward kinematics and the thorax-egocentric frame.
-
-Everything here is a pure function of `(anatomy, qpos)`: given a pose, where
-are the model's sites and bodies, and what do the sites look like from the
-thorax's own point of view. No artifact, no IO, no config -- the writer that
-persists these lives in `postprocess/outputs.py`.
-
-UNITS. `qpos` and everything derived from it here are in MODEL units, the
-same frame `stac_ik.h5`'s `qpos`, `marker_sites` and `kp_data` use. They are
-NOT the 0.1 mm world units that `kp3d.npz` and `preprocess/` carry. Crossing
-the two needs `inverse_kinematics.bridge`, and nothing in this module does.
-
-The thorax is located by NAME, through `Anatomy.body_idx`. A hard-coded body
-index is the same class of defect as a hard-coded keypoint index -- one that
-yields confident, self-consistent, completely wrong numbers -- and this
-pipeline has already paid for one of those.
-"""
+"""Model forward kinematics and the thorax-egocentric frame."""
 
 from __future__ import annotations
 
@@ -33,12 +17,7 @@ THORAX_BODY = "thorax"
 
 
 def _forward(anatomy, qpos: np.ndarray):
-    """Yield `(t, mujoco.MjData)` for every finite row of `(T, nq)` `qpos`.
-
-    Rows that are not finite are skipped entirely rather than being forced
-    through `mj_forward`: an unsolved frame must stay unsolved downstream,
-    not acquire a plausible-looking pose from whatever was in `data` last.
-    """
+    """Yield `(t, mujoco.MjData)` for every finite row of `(T, nq)` `qpos`."""
     model = anatomy.mj_model
     data = mujoco.MjData(model)
     for t in range(len(qpos)):
@@ -64,26 +43,6 @@ def fitted_site_xpos_from_qpos(
 ) -> np.ndarray:
     """`(T, nq)` poses + `(K, 3)` FITTED marker offsets -> `(T, K, 3)` marker
     positions in model units, with those offsets APPLIED. NaN where `qpos` is.
-
-    This is the array the model -> world bridge must be fitted from, and it is
-    NOT `stac_ik.h5`'s `marker_sites` dataset. That dataset is FK'd from the
-    INITIAL marker model: measured on the reference run and on this repo's own
-    runs, every file, `marker_sites` sits 2.4e-7 model units from an FK with no
-    offsets and 2.4e-3 from an FK with them. Its name promises the fitted
-    markers and it holds the initial ones, and reading it cost 65-77% of a
-    1.5-2x reprojection regression against the reference.
-
-    Why not `site_xpos_from_qpos` with the offsets written into the model:
-    MuJoCo's `mj_forward` does not pick up a runtime write to
-    `mj_model.site_pos` for these sites -- measured, a 5.7e-3 change in
-    `site_pos` moved `site_xpos` by exactly 0.0. The offsets have to go in
-    through the MJX model (`solver.set_site_pos`, a functional update), which
-    is also the route the solver itself takes, so the sites come out in the
-    same arithmetic the pose was solved in.
-
-    Evaluated in chunks of a FIXED size -- the tail is padded and sliced off --
-    because `jax.vmap` retraces for every distinct batch length, and a ragged
-    final chunk would pay a full compile to save a few frames.
     """
     import jax
     import jax.numpy as jnp
@@ -149,15 +108,7 @@ def egocentric_sites(
     anatomy,
     body: str = THORAX_BODY,
 ) -> np.ndarray:
-    """`(T, S, 3)` world points expressed in `body`'s own frame.
-
-    `p_ego = R_body^T @ (p_world - x_body)`. Both halves matter: dropping the
-    rotation leaves a quantity that still looks small, centred and smooth and
-    is wrong exactly when the animal turns.
-
-    `body` is a NAME; `Anatomy.body_idx` raises `ValueError` on an unknown
-    one rather than silently indexing the wrong body.
-    """
+    """`(T, S, 3)` world points expressed in `body`'s own frame."""
     idx = anatomy.body_idx(body)
     site_xpos = np.asarray(site_xpos, np.float64)
     xpos = np.asarray(xpos, np.float64)

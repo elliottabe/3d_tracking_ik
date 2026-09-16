@@ -1,51 +1,4 @@
-"""The FINAL collect: name sessions, get one h5 with everything in it.
-
-The per-recording `collect` stage writes one
-`ik_output_combined_<anatomy>_<run>.h5` per run root, because
-`collect_session` aggregates a single root's `bouts/` directory and every
-recording has its own root. That is the right default -- recordings do not
-share a DLT calibration, and pooling mixes calibration frames. This script is
-the explicit opt-in to pooling them anyway, one level up: name the sessions,
-and it finds every recording under them, checks they can honestly share a
-file, and writes one.
-
-    python scripts/collect_sessions.py --session Session0 --session Session1
-    python scripts/collect_sessions.py --session Session1 --out /tmp/s1.h5
-    python scripts/collect_sessions.py --all-sessions --dry-run
-
-Default output, when `--out` is omitted, sits at the ASSAY level -- above the
-sessions it pools, beside nothing it could be mistaken for:
-
-    <base>/<assay>/ik_output_combined_<anatomy>_<run>_<sessions>.h5
-
-**Metadata is the point of pooling, not an afterthought.** A pooled file is
-only useful if it can be split back apart, so every clip carries who it is
-and where it came from:
-
-  info/fly_ids    <Session>/<recording>, per clip  (written by combine_many)
-  info/buckets    the assay, per clip              (written by combine_many)
-  info/session    <Session>, per clip              (added here)
-  info/sex        female|male, per clip
-  info/status     ok | sparse:NN% | ...
-  info/excluded   the bout-flies with no fit, by name and reason
-  provenance/     the recording table: fly_id, run_root, clip count, and the
-                  half-open [start, stop) index range of that recording's
-                  clips in every per-clip array
-
-**What this refuses, and why.** Pooling is the one operation that turns two
-correct files into one wrong one silently, because nothing downstream
-re-derives what the header asserts:
-
-- a differing `fps` would put one sample rate in `source_hz` for clips
-  recorded at another, mislabelling every velocity in the pool;
-- a differing anatomy would index one model's `qpos_names` into another
-  model's qpos -- the nq=93-vs-101 trap that has already produced a
-  confident, entirely wrong dataset-wide answer in this repo;
-- a repeated `fly_id` would merge two recordings under one label, destroying
-  the only property that makes pooling reversible.
-
-Each is checked and named before anything is written.
-"""
+"""The FINAL collect: name sessions, get one h5 with everything in it."""
 
 from __future__ import annotations
 
@@ -60,14 +13,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-# This script reads and writes h5 and nothing else. It touches `anatomy` for
-# exactly two metadata strings (`names_qpos`, `name`), but loading one imports
-# mujoco and jax, and jax preallocates ~75% of every visible GPU on import.
-# Measured 2026-09-15 on an interactive node: 10 GB held across 8 devices, plus
-# a stack of CUDA_ERROR_OUT_OF_MEMORY lines burying the script's own output,
-# for two strings. Pinned to CPU before any import that could grab a device --
-# a pooling run must never compete with the training or pipeline jobs that
-# actually need the GPU. `setdefault`, so an operator can override.
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 DEFAULT_BASE = Path("/gscratch/portia/eabe/data/Johnson_lab/processed")
@@ -87,16 +32,7 @@ def _git_sha() -> str:
 
 
 def find_run_roots(base: Path, assay: str, sessions: list[str], run_name: str) -> list[Path]:
-    """Every `<base>/<assay>/<session>/<recording>/<run_name>` holding bouts.
-
-    Sorted, so two runs of this script produce the same clip order -- a
-    pooled file whose row order depended on filesystem order could not be
-    compared against itself.
-
-    A session that matches nothing is REPORTED, not skipped silently: asking
-    for Session2 and getting a Session0+1 file with no complaint is exactly
-    the kind of quiet shortfall that gets discovered downstream.
-    """
+    """Every `<base>/<assay>/<session>/<recording>/<run_name>` holding bouts."""
     roots: list[Path] = []
     empty: list[str] = []
     for session in sessions:
@@ -128,13 +64,7 @@ def list_sessions(base: Path, assay: str, run_name: str) -> list[str]:
 
 
 def read_headers(run_roots: list[Path]) -> list[dict]:
-    """Each root's own per-recording combined h5 header.
-
-    Read from the file `collect` already wrote rather than recomposed from
-    configs: this compares what the ARTIFACTS say, which is what a pooled
-    header would inherit. A root whose collect never ran has no header and is
-    reported by name.
-    """
+    """Each root's own per-recording combined h5 header."""
     import h5py
 
     out = []
@@ -197,19 +127,7 @@ def check_poolable(headers: list[dict], fly_ids: list[str]) -> float:
 
 
 def write_provenance(out_path: Path, *, headers, fly_ids, sessions, assay, run_name) -> None:
-    """Add `info/session` and the `provenance/` recording table.
-
-    Written here rather than inside `combine_many` because it is about THIS
-    pooling operation, not about combining as such: which sessions were
-    asked for, which roots answered, and where each recording's clips landed.
-
-    The index ranges are the navigational part. Every per-clip array in the
-    file is ordered the same way `combine_many` walked the roots, so
-    `[start, stop)` picks one recording out of any of them without matching
-    strings -- and they are ASSERTED against the file's own length here, so a
-    future change to that walk order is caught at write time rather than
-    silently handing a consumer the wrong clips.
-    """
+    """Add `info/session` and the `provenance/` recording table."""
     import h5py
     import numpy as np
 
@@ -281,9 +199,6 @@ def main(argv=None) -> int:
     if args.all_sessions and args.session:
         raise SystemExit("--all-sessions and --session are mutually exclusive")
     if args.target_hz and not args.rl:
-        # Resampling a per-bout-group file is not implemented (resample.py walks
-        # the padded time axis), and silently producing an un-resampled file
-        # would be worse than refusing.
         raise SystemExit(
             "--target-hz requires --rl: resampling operates on the padded time "
             "axis, so the interpolated dataset is the padded one. Use --rl "
@@ -322,9 +237,6 @@ def main(argv=None) -> int:
         f"{len(roots)} recordings, {total} clips"
     )
 
-    # The RL file is named for what it IS. `ik_output_combined_..._Session0+
-    # Session1.h5` sitting beside a padded sibling of the same name, differing
-    # only in shape, is how someone ends up averaging zeros into a figure.
     suffix = "_rl_padded" if args.rl else ""
     if args.rl and args.target_hz:
         suffix = f"_rl_{args.target_hz:g}hz_interp_padded"
@@ -354,9 +266,6 @@ def main(argv=None) -> int:
     anatomy = _load_anatomy(cfg)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    # With --target-hz the combine writes a base file that resample.py then
-    # reads; `out_path` names the resampled result, so the base goes beside it
-    # and is removed once the resample succeeds.
     combine_target = out_path.with_name(out_path.stem + ".base.h5") if args.target_hz else out_path
     report = combine_many(
         roots,

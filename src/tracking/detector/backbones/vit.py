@@ -1,8 +1,4 @@
-"""Plain ViT backbone (patch embed + pre-norm blocks).
-
-Nothing in this repo constructs it yet. `cfg` is duck-typed
-(crop/in_ch/embed_dim/patch/num_tokens/num_heads/depth/mlp_ratio).
-"""
+"""Plain ViT backbone (patch embed + pre-norm blocks)."""
 
 import jax
 import jax.numpy as jnp

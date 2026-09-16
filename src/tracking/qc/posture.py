@@ -1,30 +1,4 @@
-"""Body posture, reported per sex, flagged only when it also misfits.
-
-A combined dataset reads as rearing on 46/160 FEMALE bouts and 0/160 male.
-Pooled across sexes that signal disappears, so every aggregate here is split by
-sex.
-
-But "rearing" is an interpretation, and the evidence points the other way: the
-exemplar female is against the chamber WALL. Calling pitched-up posture a
-defect would red-flag correct
-tracking of a wall-climbing fly, and the female (walls, occlusion, OOD poses)
-is where this pipeline's real failures live.
-
-So: pitch and height are REPORTED as distributions, never as a verdict. A frame
-is FLAGGED only when a pitched-up pose ALSO reprojects badly. A fly on the wall
-is pitched and fits the cameras; invented geometry is pitched and does not.
-Whichever way the wall question falls, this check answers it from the data
-instead of assuming it.
-
-The floor plane is refit per recording from the recording's own pooled body
-centroids. `detector/coarse.py` persists a fitted plane in `coarse_tracks`'
-meta, but a `bout_summary.csv` run never does a coarse pass -- and that is how
-Session0/Session1 run. The plane is a property of the ARENA, so pooling bouts
-is the right sample.
-
-Pitch is measured against `FloorPlane.normal`, not world z: the calibration
-frame's z is not guaranteed to be the arena's up.
-"""
+"""Body posture, reported per sex, flagged only when it also misfits."""
 
 from __future__ import annotations
 
@@ -49,14 +23,7 @@ AXIS_PAIR = ("Scutellum", "Antenna_Base")  # posterior, anterior -- NAMES
 
 
 def fly_sex_label(sex_json: dict, fly: int) -> str:
-    """`"female"` / `"male"` / `"unknown"`, read from `sex.json`.
-
-    `fly0 = female` is a CONVENTION this pipeline enforces, not a fact about
-    an array index. `detector/fine.py` writes `male_fly` (the fly index that
-    is male, or `None`) and `identity` (`"sex"` or `"unknown"`); reading those
-    means a future swap relabels the column instead of silently mislabelling
-    it.
-    """
+    """`"female"` / `"male"` / `"unknown"`, read from `sex.json`."""
     if str(sex_json.get("identity")) != "sex":
         return "unknown"
     male = sex_json.get("male_fly")
@@ -73,15 +40,7 @@ def _body_centroids(kp3d_world: np.ndarray) -> np.ndarray:
 
 
 def fit_recording_floor(bout_kp3d, *, n_fit: int = 2000, up_hint=None) -> FloorPlane:
-    """One arena floor plane from several bouts' world-unit keypoints.
-
-    `up_hint` is forwarded to `fit_floor`. Pass it when a known up direction
-    exists: averaging 50 keypoints into a body centroid narrows the height
-    spread a long way, and `fit_floor`'s bottom-heaviness heuristic can land
-    below its own marginal threshold on that input -- it warns when it does,
-    and an UNCERTAIN sign flips pitch and height together, turning "on the
-    floor" into "on the ceiling" with every magnitude unchanged.
-    """
+    """One arena floor plane from several bouts' world-unit keypoints."""
     centroids = np.concatenate([_body_centroids(b) for b in bout_kp3d], axis=0)
     finite = centroids[np.isfinite(centroids).all(-1)]
     if len(finite) < 3:
@@ -93,11 +52,7 @@ def fit_recording_floor(bout_kp3d, *, n_fit: int = 2000, up_hint=None) -> FloorP
 
 
 def body_axis_pitch_deg(kp3d_world, kp_order, floor: FloorPlane, *, pair=AXIS_PAIR):
-    """`(T,)` angle in degrees between the body axis and the floor plane.
-
-    Positive is nose-up. Measured against `floor.normal`, which is oriented so
-    a fly's height is positive -- world z is not necessarily the arena's up.
-    """
+    """`(T,)` angle in degrees between the body axis and the floor plane."""
     order = as_order(kp_order)
     kp = np.asarray(kp3d_world, np.float64)
     post, ante = (order.index(n) for n in pair)
@@ -131,13 +86,7 @@ def posture_report(
     pitch_deg: float = PITCH_DEG,
     residual_mult: float = RESIDUAL_MULT,
 ) -> dict:
-    """Pitch and height distributions for one bout-fly, plus the flagged frames.
-
-    `residual_px` is `per_frame_reproj` for THIS fly. The residual
-    threshold is `residual_mult` x this bout's own median, so a bout that is
-    uniformly harder to fit does not flag wholesale -- the question is whether
-    the pitched frames are worse than this fly's own baseline.
-    """
+    """Pitch and height distributions for one bout-fly, plus the flagged frames."""
     pitch = body_axis_pitch_deg(kp3d_world, kp_order, floor)
     height = floor.height_of(_body_centroids(kp3d_world))
     resid = np.asarray(residual_px, np.float64)

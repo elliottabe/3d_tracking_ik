@@ -1,51 +1,5 @@
 #!/usr/bin/env python
-"""Build Figure 4 from the courtship IK h5.
-
-    python make_figure4.py          # all ten panels -> fig4.svg / fig4.png
-
-Panels:
-
-    A  video_0..3        camera crop + SAM3 mask tints + vector keypoints
-    B  sine_phase        extended vs folded wing, in phase during sine song
-    C  wing              both wing tips' z, shaded by song type, pulses marked
-    D  wing_phase_polar  pooled L-R wing phase difference during sine
-    E  angle_2d          wing-extension angle density, pulse vs sine
-    F  pulse_class       Pslow / Pfast pooled waveforms and centroids
-    G  zheight           body height: singing vs free-running walking
-    H  render_0..3       MuJoCo render of the fitted pair, same frames as A
-    I  pitch             male body pitch vs the pitch that would face the female
-    J  align_violin      per-bout |body - target| pitch alignment, pooled
-
-Stage 1 (`stage_analysis`) reads the combined h5 and runs the song and
-locomotion analysis over every bout-fly. Stage 2 (`stage_assets`) reads
-everything that is not in that h5: video, SAM3 masks, calibration, MuJoCo.
-Stage 3 (`render_figure`) places the panels and saves. Stages 1 and 2 are
-cached, so a cold run is minutes and restyling afterwards is seconds.
-
-What the figure should look like if it is right, written down before it is
-generated so that it can disagree:
-
-* B, C and I are one exemplar bout: the two wing traces run anti-phase during
-  pulse song and in phase during sine, and panel C's shaded segments line up
-  with the pulse events drawn over them.
-* H shows the pair on the arena floor with the wing extension panel C reports
-  at those same four frames. Wings flat where C says extended, or a body sunk
-  through the floor, means the qpos convention is not v1's. A female who
-  fragments or vanishes is the arena mesh occluding her; see `RIG_OFFSET`.
-* A's keypoints sit on the two flies. Dots on one fly and empty space beside
-  the other is the camera-order or mask-slot trap, not a fit failure.
-* D-G and J are pooled distributions. A collapsed, emptied or sign-flipped one
-  means the fly0/fly1 pairing mismatched the sexes, which is why the sex
-  cross-check in `stage_analysis` is fatal.
-
-`fig4_analysis.py` and `fig4_assets.py` are AST extractions of the source
-repo's analysis, bodies unchanged. An extraction can silently drop a branch
-that fires on only some bouts, and no figure would reveal it, so verify either
-file against a dataset whose answer is known rather than trusting the figure
-to look right.
-
-Needs a GPU node and MUJOCO_GL=egl for panel H. Never run on a login node.
-"""
+"""Build Figure 4 from the courtship IK h5."""
 from __future__ import annotations
 
 import argparse
@@ -97,16 +51,10 @@ KP_SCALE = 0.1
 VIDEO_FRAMES = (0, 515, 1030, 1545)
 CROP_WH = (520, 448)
 RENDER_SIZE = 1024
-#: Arena nudge in world cm. At (0, 0) the wall occludes a female rearing
-#: against it: she renders in fragments, or vanishes, while the male looks
-#: perfect. Not cosmetic.
 RIG_OFFSET = (0.2, 0.0)
 #: Unit-sanity and male/female-slot guard on panel J; see
 #: `compute_pitch_alignment_mvq` for the measured margin before retuning.
 SCUT_COM_OFFSET_TOL = 15.0
-#: `sex.json` authorities panel J accepts besides a human review. Safe only
-#: because panel J also cross-checks every bout against `info/sex` and raises
-#: on disagreement. Empty this for human-reviewed trees only.
 SEX_AUTHORITIES = ("mvq_typed_slots",)
 
 _PULSE_TYPES = ("Pslow", "Pfast")
@@ -171,15 +119,7 @@ def _as_str(v) -> str:
 
 
 def model_kp_names() -> list[str]:
-    """The 50 MODEL-order keypoint names from `configs/anatomy/v1.yaml`.
-
-    The combined h5 carries no `info/kp_names`, so the order comes from the
-    anatomy config and is then checked rather than trusted: every `kp3d.npz`
-    ships its own `kp_names`, and `_load_kp3d` compares the two elementwise
-    and refuses to load on a mismatch. A count-only match is not enough --
-    the same 50 names in a different order reads as a real landmark with
-    excellent jitter and confidence.
-    """
+    """The 50 MODEL-order keypoint names from `configs/anatomy/v1.yaml`."""
     import yaml
     cfg = yaml.safe_load(ANATOMY_YAML.read_text())
     names = cfg["model"]["KP_NAMES"]
@@ -189,23 +129,7 @@ def model_kp_names() -> list[str]:
 
 
 def load_combined(h5_path):
-    """Load the combined h5 into `(data, info, kp_names, bout_keys, rows)`.
-
-    `rows` is one dict per bout-fly:
-
-        key          bout group name in `data` ('bout_000', ...)
-        recording    'Session0/2025_10_20_13_20_04'
-        start_frame  absolute recording frame of this bout's frame 0
-        fly          0 or 1, the tracker slot
-        bout_name    the bout's directory in the processed tree ('bout_00028')
-        sex          'male' or 'female'
-
-    Every field is read from a place the file states outright. None is inferred
-    from ordinal position, because position here is a permutation of the
-    processed tree's bout numbering: deriving the directory from it reads an
-    unrelated bout's masks and kp3d while looking entirely plausible. A missing
-    field raises rather than falling back to a guess.
-    """
+    """Load the combined h5 into `(data, info, kp_names, bout_keys, rows)`."""
     data = A.load(str(h5_path), enable_jax=False)
     info = data.get("info", {}) or {}
     bout_keys = sorted(k for k in data
@@ -250,11 +174,7 @@ def load_combined(h5_path):
 
 
 def build_pairs(rows, bout_keys):
-    """(key_fly0, key_fly1) for every bout where both flies were reconstructed.
-
-    Grouped by (recording, bout_name) with the slot taken from `fly_uid`, so
-    pairing never depends on two rows happening to be adjacent.
-    """
+    """(key_fly0, key_fly1) for every bout where both flies were reconstructed."""
     seen = {}
     for r in rows:
         seen.setdefault((r["recording"], r["bout_name"]), {})[r["fly"]] = r["key"]
@@ -265,11 +185,7 @@ def build_pairs(rows, bout_keys):
 
 
 def find_exemplar(results, rows):
-    """The pinned exemplar pair, matched by (recording, start frame).
-
-    There is no fallback to "some other bout": that is how the wrong exemplar
-    shipped in the source repo.
-    """
+    """The pinned exemplar pair, matched by (recording, start frame)."""
     by_key = {r["key"]: r for r in rows}
     for r in results:
         row = by_key.get(r["key0"])
@@ -285,12 +201,7 @@ def find_exemplar(results, rows):
 
 
 def _sam3_bout_name(row) -> str:
-    """The processed tree's bout directory for a row, checked against the CSV.
-
-    The name comes from the h5; where the recording's bout summary is readable
-    the two must agree, since a disagreement means masks and keypoints would be
-    read from an unrelated bout.
-    """
+    """The processed tree's bout directory for a row, checked against the CSV."""
     name = row.get("bout_name") or ""
     rec_dir = PROCESSED_ROOT / row["recording"]
     for csv in sorted(rec_dir.glob("*/bouts*.csv")) + sorted(rec_dir.glob("*.csv")):
@@ -345,10 +256,6 @@ def stage_analysis(h5_path, pose_dir, skipped):
     if not results:
         raise SystemExit("no pairs survived filtering; nothing to plot")
 
-    # `analyze_pair` puts the male in slot 0 from song and body length; the h5
-    # states the sex outright. Two independent records, so a disagreement means
-    # neither can be trusted -- and every pooled panel is conditioned on the
-    # male.
     by_key = {r["key"]: r for r in rows}
     disagree = [r["key0"] for r in results
                 if by_key.get(r["key0"], {}).get("sex") != "male"]
@@ -361,9 +268,6 @@ def stage_analysis(h5_path, pose_dir, skipped):
     print(f"sex cross-check: song-based sexing agrees with info/sex on all "
           f"{len(results)} pairs")
 
-    # Males whose partner could not be reconstructed contribute nothing to
-    # `pairs`. Pool them into the single-fly panels only (D, E, F, G); the
-    # exemplar, pitch traces and violin are pair quantities.
     singles = X.analyze_unpaired_males(data, bout_keys, info, pairs, kp_names,
                                        song_cfg=song)
     if singles:
@@ -445,9 +349,6 @@ def stage_analysis(h5_path, pose_dir, skipped):
     except Exception as e:                        # noqa: BLE001
         skipped.append(f"panel G free-running arm ({type(e).__name__}: {e})")
 
-    # Frames whose Scutellum leaves the recording's own arena envelope are a
-    # triangulation failure near a wall, not a real climb. Guarded per bout:
-    # one unresolvable recording must not silently ungate the rest.
     arena_bad, gated, ungated = {}, 0, []
     for r in results:
         row = by_key.get(r["key0"])
@@ -513,12 +414,7 @@ def stage_analysis(h5_path, pose_dir, skipped):
 # --------------------------------------------------------------------------
 
 def stage_assets(ctx, pose_dir, skipped):
-    """Panels A, H, I and J.
-
-    Each panel is independently guarded: a missing SAM3 tree must not take the
-    renders down with it, and a failure is reported at the end rather than
-    aborting a figure whose other panels are fine.
-    """
+    """Panels A, H, I and J."""
     import cv2
 
     data, kp_names = ctx["data"], ctx["kp_names"]
@@ -581,9 +477,6 @@ def stage_assets(ctx, pose_dir, skipped):
             sam3_npz, cam_idx, fly_indices=[male_slot, female_slot],
             frame_indices=[int(f) for f in vidx])
 
-        # Crop centred on the pair's Scutellum midpoint, clamped to the frame
-        # so a pair at the wall still yields a full-size window. A NaN centre
-        # carries the nearest finite one rather than collapsing to (0, 0).
         center = X._pair_center_xyz(male_kp3d, female_kp3d,
                                     kp_names.index("Scutellum"), T)
         uvc = np.asarray(X._dlt_project(dlt, np.asarray(center, float) * KP_SCALE))
@@ -666,9 +559,6 @@ def stage_assets(ctx, pose_dir, skipped):
         qm = np.asarray(data[ex["key0"]]["qpos"])
         n = min(T, qm.shape[0], female_com.shape[0], len(male_kp3d))
         male_pitch = X.body_pitch_deg_from_quat(qm[:n, 3:7])
-        # The Scutellum comes from the tree's kp3d (world frame), not the h5's
-        # re-centred kp_data: mixing a re-centred position against the
-        # world-frame female COM puts target_pitch in no coherent frame.
         scut = male_kp3d[:n, kp_names.index("Scutellum"), :]
         vec = female_com[:n] - scut
         nrm = np.linalg.norm(vec, axis=-1)
@@ -684,9 +574,6 @@ def stage_assets(ctx, pose_dir, skipped):
 
     # --- panel J ---------------------------------------------------------
     try:
-        # Two independent records of which fly is the male: the tree's sex.json
-        # and the h5's info/sex. on_conflict="raise" makes a disagreement fatal
-        # rather than a silently shorter violin.
         h5_male_fly = {}
         for r in ctx["rows"]:
             if r["sex"] == "male" and r["bout_name"]:
@@ -736,9 +623,6 @@ def render_figure(panels, out_path, transparent=None):
 
     matplotlib.rcParams.update({
         "font.family": "sans-serif",
-        # Liberation Sans is metric-compatible with Arial and is what
-        # fontconfig substitutes when Arial is absent, so the layout font
-        # matches the font actually drawn on a machine without Arial.
         "font.sans-serif": ["Arial", "Helvetica", "Liberation Sans", "DejaVu Sans"],
         "font.size": 6.0, "axes.linewidth": 0.6,
         "xtick.major.width": 0.6, "ytick.major.width": 0.6,

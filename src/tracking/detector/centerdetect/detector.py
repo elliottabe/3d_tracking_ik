@@ -1,51 +1,6 @@
 """CenterDetect inference (`CenterDetector`) and the greedy multi-view
 lift from per-camera 2D peaks to 3D fly centres (`lift_peaks_to_centres`,
 `cluster_centres`).
-
-`lift_peaks_to_centres` takes a `geometry.rig.CameraRig` (addressed by camera
-name) and uses `rig.matrices_f32` internally.
-
-Pipeline, per frame:
-
-  1. `CenterDetector.peaks(frames)` -- one CenterDetect forward pass per
-     camera, top-2 peaks each, rescaled to full-image pixels.
-     CenterDetect has NO cross-camera identity: camera A's "peak 0" and
-     camera B's "peak 0" are not guaranteed to be the same animal, and a
-     camera can be missing a peak (dim second blob below `min_score`) or
-     have one moved by mask/BG noise. `lift_peaks_to_centres` must not
-     assume peak *index* is animal identity.
-
-  2. `lift_peaks_to_centres` resolves that with a greedy RANSAC-flavoured
-     search: seed a 3D candidate from every (camera pair, peak pair)
-     combination that is geometrically possible (DLT triangulation),
-     reproject each candidate to every camera, and count INLIERS -- cameras
-     whose reprojection lands within `max_resid_px` of *either* of that
-     camera's two peaks. The candidate with the most inliers wins (ties
-     broken by summed peak score), gets refined by a full DLT over its own
-     inlier set, and those specific peaks are consumed (marked NaN) so the
-     next iteration finds a DIFFERENT animal. Stops when the best remaining
-     candidate has fewer than `min_views` inliers, or `max_animals` centres
-     have been found.
-
-  3. `cluster_centres` merges centres that are the same physical animal
-     seen twice (e.g. a spurious extra candidate). Padding is always NaN
-     (so a fixed-shape `(N, 3)` array survives however many animals were
-     actually found), never a variable-length list -- this is what keeps
-     row `i` naming the same animal slot across frames when one fly goes
-     undetected (see `cluster_centres`'s own docstring).
-
-Every distance/centre in this module is in the rig's world units and every
-pixel is FULL-IMAGE px (not heatmap px, not crop px) unless named otherwise
--- see CLAUDE.md on labelling with real names and units.
-
-CAMERA-ORDER CONTRACT: every per-camera axis in this module -- `peaks[c]`,
-`scores[c]` and `rig.matrices_f32[c]` -- MUST be the same camera `c`, in
-the rig's own (canonical) order. Nothing here re-sorts or matches by name;
-a caller holding an array in a DIFFERENT camera order must permute it into
-the rig's order FIRST. `lift_peaks_to_centres` checks the one thing it can
-verify cheaply -- that `peaks` and the rig agree on camera COUNT -- and
-raises `ValueError` on a mismatch; it cannot detect a same-length but
-wrongly-ordered camera axis.
 """
 
 from __future__ import annotations
@@ -73,13 +28,7 @@ class CenterDetector:
 
     @staticmethod
     def preprocess(frame: np.ndarray) -> np.ndarray:
-        """One full RGB frame -> the 320x320 CenterDetect model input.
-
-        A static method (not a bound instance method) so it can be passed
-        as `SlotReader(preprocess=CenterDetector.preprocess)` and run
-        inside the per-camera decode threads instead of serially inside
-        `peaks` -- measured at 1.87x on the mask-free pass.
-        """
+        """One full RGB frame -> the 320x320 CenterDetect model input."""
         return _centerdetect_preprocess(frame)
 
     def peaks(self, frames, pre=None):
@@ -88,14 +37,6 @@ class CenterDetector:
         `lift_peaks_to_centres` (see module docstring's camera-order
         contract); this method itself has no camera identity of its own to
         check that against, so the contract is the caller's to keep.
-
-        `pre`, when given, is the ALREADY-preprocessed `(C, 320, 320, 3)`
-        model input for these same frames -- what a `SlotReader(preprocess=
-        CenterDetector.preprocess)` computes inside the per-camera decode
-        threads instead of serially here. `frames` is still required (and
-        still supplies the ORIGINAL `img_w`/`img_h` that `peaks_from_heatmap`
-        needs to undo the anisotropic squash), so a `pre` built from a
-        different frame set cannot silently change the px scale.
 
         Returns:
             peaks: (C, 2, 2) float32 full-image px, NaN where score < min_score.
@@ -113,9 +54,6 @@ class CenterDetector:
             pre = np.stack([self.preprocess(frames[i]) for i in range(c)])
         else:
             pre = np.asarray(pre)
-            # A per-camera COUNT mismatch is the one way a precomputed stack
-            # can be wrong that is detectable here: it would pair camera i's
-            # heatmap with camera j's image size downstream.
             if pre.shape[0] != c:
                 raise ValueError(
                     f"pre has {pre.shape[0]} cameras but frames has {c} -- the "
@@ -155,11 +93,7 @@ def _seed_candidates(peaks, cam_mats):
     """All (camera pair x peak pair) triangulation candidates with both
     peaks non-NaN. Returns (M, 3) candidate 3D points, or an (0, 3) array if
     fewer than 2 cameras have any usable peak.
-
-    Generic over the number of peak slots per camera (`peaks.shape[1]`) --
-    CenterDetect always emits 2 (top-2 peaks), but this is not hardcoded so
-    a caller with a single peak slot per camera (e.g. a known-count scene)
-    still lifts correctly."""
+    """
     n_cams, n_slots = peaks.shape[0], peaks.shape[1]
     valid_peak = ~np.isnan(peaks).any(axis=-1)  # (C,n_slots)
 
@@ -313,14 +247,6 @@ def cluster_centres(centres, *, min_sep_units: float = 15.0) -> np.ndarray:
     """Merge centres closer than `min_sep_units` by repeatedly averaging the
     closest pair below threshold. NaN-padded back to the input length so the
     shape never depends on how many merges happened.
-
-    NaN-padding the output to a fixed `(N, 3)` shape -- rather than
-    returning only the surviving/merged rows -- matters beyond "shape
-    stays constant": this is what keeps row `i` meaning the same animal
-    slot across frames in the common partial-detection case (one of two
-    flies not found in a frame, so its row is NaN). A shrinking output
-    would silently shift every later slot down by one, which downstream
-    is indistinguishable from a fly-identity swap.
 
     Args:
         centres: (N, 3) float32, may already contain NaN rows (ignored,

@@ -1,16 +1,4 @@
-"""Coverage: how much of the bout was actually OBSERVED.
-
-Measured from the raw detector output and its confidence, never from a
-filtered or gap-filled array. `preprocess.gaps.fill_short_gaps` and the
-keypoint filter both leave a never-observed frame finite and plausible, so a
-coverage number computed from values alone reports the filter's diligence
-instead of the detector's. The mask-free pass's whole advantage on the
-reference bout is a coverage number -- female missing 0.007 against 0.154
-masked -- and counting an interpolated frame as present erases exactly that.
-
-A frame-keypoint is OBSERVED when its confidence clears `conf_thresh` AND its
-position is finite. Either condition failing makes it missing.
-"""
+"""Coverage: how much of the bout was actually OBSERVED."""
 
 from __future__ import annotations
 
@@ -53,10 +41,6 @@ def coverage_report(kp3d_raw, conf3d, kp_order, *, conf_thresh: float = OBSERVED
         else np.zeros(0, np.int64)
     )
 
-    # `None` when nothing is missing, rather than whichever keypoint `max`
-    # happens to return first. A perfect bout naming a "worst keypoint" at
-    # 0.0 missing puts a keypoint name in a scorecard column that reads as a
-    # problem; the honest answer there is that there isn't one.
     worst = max(per, key=per.get) if per else None
     if worst is not None and not per[worst] > 0.0:
         worst = None

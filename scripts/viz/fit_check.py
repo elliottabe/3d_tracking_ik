@@ -1,40 +1,5 @@
 """Does the STAC fit actually land on the fly? Four panels, on real frames.
 
-The offsets fit reports a single scalar -- a max offset delta against a
-reference -- and that number is currently ~19x over its gate for reasons still
-under investigation. A scalar cannot say WHETHER the fit is wrong or merely
-different, so this looks at the frames.
-
-**What this should show if the fit is good:**
-
-  1. Per-frame residual between each fitted marker site and the keypoint it was
-     fitted to sits at a few hundredths of a millimetre and is FLAT across
-     frames. A rising trend means the fit is tracking something that drifts; a
-     spiky trace means individual frames are failing, not the model.
-  2. Per-keypoint residual is roughly even across landmarks. A single landmark
-     an order of magnitude worse than its neighbours is a marker attached to
-     the wrong body, which is the failure mode that produces a plausible fit
-     with a wrong skeleton.
-  3. The fitted skeleton overlaid on the observed keypoints looks like a fly:
-     leg chains connected, wings where wings go, no limb folded through the
-     body. This is the panel that catches an anatomically wrong fit that every
-     residual metric rates as good.
-  4. The FITTED skeleton has the same segment lengths as the ANIMAL. For each
-     leg segment, the median fitted marker-to-marker distance should match the
-     median observed keypoint-to-keypoint distance: a ratio of 1. A segment
-     systematically longer or shorter means the marker offsets absorbed a
-     scale error rather than the skeleton matching the fly -- which is exactly
-     how this pipeline once hid a 38x body-scale mistake, with residuals and
-     NaN counts all looking healthy. This is the panel that can fail while the
-     other three look fine.
-
-     (An earlier version of this panel plotted the coefficient of variation of
-     marker-to-marker distance over time and called it a rigid invariant. That
-     was wrong: the two markers of a leg segment sit on bodies either side of a
-     rotating joint, at fitted offsets that do not lie on the joint axis, so
-     their separation varies with joint angle BY CONSTRUCTION. It measured
-     anatomy, not fit quality.)
-
 Usage:
     python scripts/viz/fit_check.py --fly 0 --out figures/<date>-fit-check
 """

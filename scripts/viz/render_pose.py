@@ -1,21 +1,5 @@
 """Render the fitted MuJoCo pose, so the fit can be looked at rather than scored.
 
-Every other check in this repo reduces the fit to a number. This one puts the
-posed body model on screen from several angles, which is the only way to catch
-an anatomically wrong fit that scores well -- a leg folded through the abdomen,
-a wing rotated edge-on, a body upside down. This pipeline's history is exactly
-that: a keypoint-order bug produced perfect-looking jitter, confidence and
-residual metrics and was caught only by looking at a render.
-
-**What this should show if the fit is good:** a recognisable fly in every
-frame -- six legs in plausible walking or standing poses, wings attached at the
-thorax and lying along the body or extended to one side, abdomen trailing, no
-limb passing through the body. For the MALE during courtship, one wing
-extended away from the midline; for the FEMALE, both wings folded over the
-abdomen.
-
-Needs a GPU node and `MUJOCO_GL=egl` (set here). Never run on a login node.
-
 Usage:
     python scripts/viz/render_pose.py --fly 1 --frames 120 250 380 \
         --out figures/<date>-pose
@@ -52,15 +36,7 @@ FITTED_RGBA = (0.17, 0.54, 0.24, 1.0)
 
 
 def add_point_geoms(scene, points, rgba, size):
-    """Draw world points as spheres in an already-updated MjvScene.
-
-    MuJoCo renders these with the SAME camera as the body, so no hand-rolled
-    3D->pixel projection is involved. That matters: two attempts at projecting
-    analytically -- one from azimuth/elevation/fovy, one from the scene's
-    published frustum -- landed points a median of 5 px and 13 px from where
-    MuJoCo actually drew the same sites, which is close enough to look right
-    and far enough to misread a fit by a whole keypoint.
-    """
+    """Draw world points as spheres in an already-updated MjvScene."""
     mat = np.eye(3).flatten()
     for p in np.asarray(points, float):
         if scene.ngeom >= scene.maxgeom or not np.isfinite(p).all():
@@ -131,9 +107,6 @@ def main():
             continue
         data.qpos[:] = qpos[t]
         mujoco.mj_forward(model, data)
-        # Frame the camera from the POSE, never a magic constant: the fly is
-        # about 0.28 model units long, and a hard-coded distance that happens
-        # to suit one model fills the frame with an abdomen on the next.
         pts = data.site_xpos[anatomy.site_idxs]
         centre = pts.mean(axis=0)
         extent = float(np.linalg.norm(pts - centre, axis=1).max())
@@ -157,32 +130,7 @@ def main():
 
 
 def _render_comparison(args, model, anatomy):
-    """Before/after for the same frames, labelled, one row per frame.
-
-    Assembled with matplotlib rather than concatenated raw, because an
-    unlabelled before/after grid is exactly the figure someone reads the wrong
-    way round. The frames are chosen by the caller -- pick ones where the pose
-    actually CHANGED, or the comparison shows two identical flies and proves
-    nothing.
-
-    **The overlay shows why marker residual cannot judge a wing.** With the
-    fitted sites (green) and observed keypoints (cyan) both drawn, they sit on
-    top of each other across the body AND on the wings, before and after a
-    refinement that rotated wing pitch by up to 18 degrees. That is not a
-    contradiction -- it is the null space made visible: the three wing
-    keypoints are near-collinear, so rotating the blade about its long axis
-    barely moves them. The markers agree either way, which is exactly why the
-    residual improves only 6% while the pose changes a lot.
-
-    **A render alone cannot judge a wing.** On the wings-only refinement this
-    figure showed one wing becoming visibly narrower, which reads as the
-    "wing renders edge-on" failure this project has recorded. It was not: the
-    narrowing wing was the FOLDED one (yaw at its stop), folded wings are
-    narrow, and its pitch had moved from -31.9 deg toward the documented
-    -45..-55 deg marker optimum on 74% of frames -- away from the ~-20 deg
-    stall that is the actual defect. Read this figure WITH the joint angles,
-    never instead of them.
-    """
+    """Before/after for the same frames, labelled, one row per frame."""
     import matplotlib
 
     matplotlib.use("Agg")

@@ -1,11 +1,4 @@
-"""Every QC check for one bout-fly, merged into the `qc.json` the scorecard reads.
-
-Structural defects RAISE; quality numbers are recorded. The line is whether the
-artifact is readable and self-consistent, not whether it is good: a collapsed
-keypoint pair is anatomy that cannot exist, while a 3 px reprojection is a
-number a human weighs. Failing on quality would make the pipeline stop on the
-female -- the fly it exists to measure.
-"""
+"""Every QC check for one bout-fly, merged into the `qc.json` the scorecard reads."""
 
 from __future__ import annotations
 

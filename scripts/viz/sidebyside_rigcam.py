@@ -1,24 +1,5 @@
 """Thin CLI over `tracking.viz.sidebyside.render_sidebyside` (Task 16).
 
-The render itself, its docstring (what a right vs. wrong render looks like,
-frame sampling), and the mujoco/cv2 plumbing now live in
-`src/tracking/viz/sidebyside.py` -- this script does nothing but parse
-arguments and call it, so there is exactly ONE implementation the pipeline
-stage (`pipeline.recording_stages.sidebyside_bout_fly`) and this ad-hoc CLI
-both run.
-
-Use the pipeline stage (`python -m tracking.run ... stages=[sidebyside]`)
-for a run's own renders -- it reads `bout_start_frame` from that bout's
-`mvq_meta.json` and writes `sidebyside.mp4`/`sidebyside_still.png`/
-`sidebyside.pose_source.json` next to the run's own data, with no path to
-type by hand. This script remains for one-off figures against an arbitrary
-tree (a patched comparison run under `--work`, a run from before this stage
-existed, CLAUDE.md's `figures/<topic>/` scratch renders) where that
-convenience does not apply.
-
-Needs a GPU node and `MUJOCO_GL=egl` (set by the module). Never run on a
-login node.
-
 Usage:
     python scripts/viz/sidebyside_rigcam.py --run <run_root> --bout 28 \
         --fly 0 1 --out figures/<date>-sidebyside
@@ -34,15 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _bout_start_frame(kp2d_dir: Path, given: int | None) -> int:
-    """`--bout-start` if given, else read from `kp2d_dir`'s `mvq_meta.json`.
-
-    A real pipeline bout dir always has this file (written by `fine`); an
-    ad-hoc patched tree built by hand for a one-off comparison may not, which
-    is why `--bout-start` stays an override rather than being removed
-    outright the way the pipeline stage removes it -- that stage has a real
-    run's own `mvq_meta.json` to read and no excuse not to; this script
-    sometimes does not.
-    """
+    """`--bout-start` if given, else read from `kp2d_dir`'s `mvq_meta.json`."""
     if given is not None:
         return int(given)
     meta_path = Path(kp2d_dir) / "mvq_meta.json"

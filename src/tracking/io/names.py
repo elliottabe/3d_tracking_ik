@@ -1,13 +1,4 @@
-"""The ordering contract: one canonical keypoint order, one canonical camera order.
-
-Two index spaces for keypoints and two for cameras have historically produced
-confident, self-consistent, completely wrong numbers that every jitter,
-confidence and residual metric rated as good. `model/fly50.json`'s
-`node_names` and `configs/anatomy/v1.yaml`'s `model.KP_NAMES` are THE SAME 50
-NAMES IN DIFFERENT ORDERS; indexing one with the other's integers reads a leg
-where a wing was meant. This module makes the order a value you pass around by
-name, and `order_sha` makes it a thing an artifact can be checked against.
-"""
+"""The ordering contract: one canonical keypoint order, one canonical camera order."""
 
 from __future__ import annotations
 
@@ -57,12 +48,7 @@ class Order:
         return iter(self.names)
 
     def permutation_to(self, other: Order) -> np.ndarray:
-        """Indices `p` such that `[self.names[i] for i in p] == list(other.names)`.
-
-        Use as `array[..., p, ...]` to move an axis from this order into
-        `other`'s. Refuses two orders that do not name the same set, because a
-        permutation between different sets is a silent data loss.
-        """
+        """Indices `p` such that `[self.names[i] for i in p] == list(other.names)`."""
         if set(self.names) != set(other.names):
             missing = sorted(set(other.names) - set(self.names))
             extra = sorted(set(self.names) - set(other.names))
@@ -78,12 +64,7 @@ class Order:
 
 
 def load_keypoint_order(anatomy_cfg) -> Order:
-    """Canonical keypoint order from an anatomy config's `model.KP_NAMES`.
-
-    `anatomy_cfg` is the composed anatomy config (a DictConfig or a plain
-    mapping). Refused by name if `KP_NAMES` is absent: a pipeline that guessed
-    an order here would be the exact failure this module exists to prevent.
-    """
+    """Canonical keypoint order from an anatomy config's `model.KP_NAMES`."""
     model = anatomy_cfg["model"] if "model" in anatomy_cfg else None
     if model is None or "KP_NAMES" not in model:
         raise OrderMismatch(
@@ -94,12 +75,7 @@ def load_keypoint_order(anatomy_cfg) -> Order:
 
 
 def load_camera_order(calib_dir) -> Order:
-    """Canonical camera order = the calibration glob order, `sorted(Cam*.yaml)`.
-
-    This is the order every camera axis in the repo is in. It is defined by the
-    calibration directory and nothing else, so a recording config that lists
-    cameras must MATCH it rather than define it (see `RecordingSpec.validate`).
-    """
+    """Canonical camera order = the calibration glob order, `sorted(Cam*.yaml)`."""
     paths = sorted(glob.glob(os.path.join(str(calib_dir), "Cam*.yaml")))
     if not paths:
         raise OrderMismatch(f"no Cam*.yaml calibration files in {calib_dir}")
@@ -107,11 +83,7 @@ def load_camera_order(calib_dir) -> Order:
 
 
 def order_sha(kp: Order, cams: Order | None = None) -> str:
-    """16-hex digest of a keypoint order and (optionally) a camera order.
-
-    Stamped into every artifact and verified on read, so an array whose axes
-    were written under one order can never be silently read under another.
-    """
+    """16-hex digest of a keypoint order and (optionally) a camera order."""
     payload = kp.sha + ("|" + cams.sha if cams is not None else "")
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 

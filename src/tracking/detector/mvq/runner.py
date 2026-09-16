@@ -1,26 +1,4 @@
-"""frames -> windows -> world keypoints -> pipeline format, for ONE mvq checkpoint.
-
-This repo has no masks and one route: there is no mask-dependent path here,
-and every window this runner builds is T=1. `window_pref` defaults to, and is
-expected to stay, `"own"`.
-
-ORDER DISCIPLINE (CLAUDE.md; both traps were live bugs in this pipeline):
-
-  * CAMERA axis. The model needs the CANONICAL order (the calibration glob
-    order == `CameraRig.from_calib_dir`'s own order). The constructor
-    refuses a `rig` whose camera order is not sorted (i.e. not the glob
-    order), so `crops`, `M`, `t_local`, `origin` and every returned `kp2d`
-    share ONE camera axis -- a mismatch plots one camera's keypoints on
-    another camera's image and still looks almost plausible.
-  * KEYPOINT axis. The model speaks ITS OWN order (`meta["keypoint_names"]`,
-    exposed as `model_order`); the pipeline speaks the anatomy XML's
-    `KP_NAMES` (`kp_order`). They are the same 50 names in DIFFERENT orders.
-    `to_pipeline` is the ONLY conversion, and it is the single permutation in
-    this repo: `model_order.permutation_to(kp_order)`, computed once. Nothing
-    else in this module indexes a keypoint by integer, and `model_order` is
-    exposed only so `to_pipeline` (and its test) can reason about it -- no
-    other module may use it.
-"""
+"""frames -> windows -> world keypoints -> pipeline format, for ONE mvq checkpoint."""
 
 from __future__ import annotations
 
@@ -50,23 +28,11 @@ _IMAGENET_STD = jnp.asarray([0.229, 0.224, 0.225], jnp.float32)
 # -1 = unknown (the single-fly rule).
 SEX_FEMALE, SEX_MALE, SEX_UNKNOWN = 0, 1, -1
 
-# Which window a fly is read from when more than one holds it (see
-# `prefer_own_window`). "own" prefers the window centred on that fly's own
-# tracked centre; "any" takes the best candidate from any window.
 WINDOW_PREF_MODES = ("own", "any")
 DEFAULT_WINDOW_PREF = "own"
 
-# Median per-keypoint 3D distance (world units; 3.0 == 0.3 mm) below which two
-# typed slots are the SAME physical fly: real flies stay body-lengths apart
-# over most of their 50 landmarks, so one instance read twice is ~0. NOT a
-# gate-string knob -- a run that changed it would look identical to one that
-# did not.
 COLLAPSE_DIST_UNITS = 3.0
 
-# Existence hallucination guard: `exist` is a per-WINDOW head, so a window
-# that has drifted off both flies can still clear `exist_thresh` while every
-# keypoint's per-view visibility is near zero in every camera. See
-# `_passes_vis_guard`.
 HALLUCINATION_VIS_THRESH = 0.5
 
 
@@ -75,12 +41,7 @@ def _sigmoid(x):
 
 
 def resolved_window_pref(window_pref):
-    """`window_pref` as one of `WINDOW_PREF_MODES` (None -> `DEFAULT_WINDOW_PREF`).
-
-    Refused by name rather than silently defaulted: a typo'd mode that
-    silently became "own" (or "any") would stamp a gate string naming a rule
-    the lift did not actually run.
-    """
+    """`window_pref` as one of `WINDOW_PREF_MODES` (None -> `DEFAULT_WINDOW_PREF`)."""
     if window_pref is None:
         return DEFAULT_WINDOW_PREF
     window_pref = str(window_pref).strip().lower()
@@ -95,14 +56,6 @@ def _affine_np(matrices_f64):
     """`(C,3,4)` untransposed DLT projection matrices -> `M (C,2,3)`, `t (C,2)`
     (float64) such that a WORLD point projects to CROP pixels as
     `uv = M @ X + t` (before subtracting the crop origin).
-
-    Ported from `v12_windows.py::_affine_np`, but reads `CameraRig`'s own
-    `matrices_f64` directly rather than round-tripping through the
-    float32-transposed `(C,4,3)` layout the source's `ReprojectionTool.
-    camera_matrices` stored -- CLAUDE.md's numerics warning applies here too
-    (float32 moves a reprojection by ~1e-2 px). Raises unless the cameras are
-    affine (`tracking/affine_camera.py`'s assumption: projection row 3 ==
-    `[0,0,0,1]`).
     """
     P = np.asarray(matrices_f64, np.float64)  # (C,3,4)
     if not np.allclose(P[:, 2, :], [0.0, 0.0, 0.0, 1.0], atol=1e-6):
@@ -150,9 +103,6 @@ def _passes_vis_guard(read, *, min_vis):
     """False iff `read['vis']` (C,K) per-view visibility sigmoid is below
     `min_vis` in EVERY camera -- catches a window that has drifted off both
     flies (`exist` can still clear threshold while `vis` is ~0 everywhere).
-
-    `min_vis=None` (the default) is a no-op. A read with no `vis` field, or
-    an empty/all-NaN one, also passes: there is nothing to guard against.
     """
     if min_vis is None:
         return True
@@ -172,11 +122,6 @@ def _passes_vis_guard(read, *, min_vis):
 def prefer_own_window(cands, own_row, pref, b_at):
     """The best of `cands` (sorted-comparable tuples, best == `min`), taken
     from window `own_row` if that window offers one.
-
-    A preference, never a filter, and a no-op under `pref="any"` or
-    `own_row < 0`. `own_row` is an ABSOLUTE window row of the `infer` output
-    (-1 for "this fly has no own window here"); `b_at(c)` reads a
-    candidate's window row.
     """
     if pref == "own" and int(own_row) >= 0:
         own_only = [c for c in cands if b_at(c) == int(own_row)]
@@ -186,11 +131,7 @@ def prefer_own_window(cands, own_row, pref, b_at):
 
 
 def _own_rows(own_windows, off, nb):
-    """Per-fly LOCAL window indices -> ABSOLUTE rows of an `infer` output.
-
-    -1 for a fly with no own window in this batch, which simply leaves it
-    with no preference.
-    """
+    """Per-fly LOCAL window indices -> ABSOLUTE rows of an `infer` output."""
     if own_windows is None:
         return [-1, -1]
     return [(int(off) + int(w)) if 0 <= int(w) < int(nb) else -1 for w in own_windows]
@@ -210,17 +151,6 @@ def pick_typed_pair(
     """Read the FEMALE (fi=0) and MALE (fi=1) typed slots for one pending
     frame's windows `[off, off + nb)` of an `infer` output, apply the
     collapse guard, and return the survivors.
-
-    For each typed slot, take the window with the HIGHEST existence for that
-    slot -- unless that fly has an OWN window (`own_windows`, `window_pref`),
-    in which case its own window's read wins whenever it clears
-    `runner.exist_thresh` there.
-
-    COLLAPSE GUARD. The two typed slots are chosen INDEPENDENTLY, so nothing
-    above stops both of them reading the SAME physical fly. Two real flies
-    are never within `collapse_dist_units` over most of their 50 keypoints;
-    the same instance read twice is ~0. A frame whose two slots agree that
-    closely keeps only the more confident one. Ties keep the FEMALE (fi=0).
 
     Returns:
         picks: {fi: (read_typed_result, absolute_window_index)} for fi in
@@ -266,22 +196,7 @@ def pick_typed_pair(
 
 
 class MVQRunner:
-    """frames -> windows -> world keypoints -> pipeline format, for ONE checkpoint.
-
-    `run_dir_or_final` / `step` / `attn_impl` are `load_mvq_model`'s (a
-    `final/` dir with no step, else the run dir plus an int step or
-    `"latest"`; `attn_impl="xla"` to run a cuDNN-trained run on CPU).
-    `"latest"` is resolved to a concrete int HERE, once, so the step that is
-    loaded is the step that is reported and stamped into the gate string.
-
-    `rig` is this recording's calibrated `CameraRig`; its camera order MUST
-    be the canonical glob order (checked below) -- every camera axis this
-    runner produces assumes it. `kp_order` is the pipeline's canonical
-    keypoint order (the anatomy XML's `KP_NAMES`); `batch` is the fixed
-    batch the forward is compiled for (short batches are padded and the
-    padding dropped -- keeping the batch full is the pipeline's central
-    throughput lever, since the forward pads to `batch` regardless).
-    """
+    """frames -> windows -> world keypoints -> pipeline format, for ONE checkpoint."""
 
     def __init__(
         self,
@@ -318,9 +233,6 @@ class MVQRunner:
         self.step_label = "final" if self.step is None else self.step
         self.model, self.meta = load_mvq_model(self.checkpoint, step=self.step, attn_impl=attn_impl)
 
-        # The model's OWN keypoint order -- exposed ONLY so `to_pipeline` (and
-        # its test) can reason about it. Nothing else may use it: everything
-        # this runner RETURNS is already permuted into `kp_order`.
         self.model_order = Order(self.meta["keypoint_names"])
         self.kp_order = kp_order
         self.kp_names = list(kp_order.names)
@@ -335,11 +247,6 @@ class MVQRunner:
 
         self.batch = int(batch)
         self.exist_thresh = float(exist_thresh)
-        # Post-training temperature calibration: read-only here, and NOT
-        # enrolled in the gate string -- it is a property of the WEIGHTS
-        # (already named by checkpoint/step there), not an independent
-        # choice a caller makes. Defaults to 1.0 (no-op) for a checkpoint
-        # whose `mvq_run.json` predates calibration or was never calibrated.
         calib = self.meta.get("calibration") or {}
         self.exist_temperature = float(calib.get("exist_temperature", 1.0))
         self.vis_temperature = float(calib.get("vis_temperature", 1.0))
@@ -350,13 +257,6 @@ class MVQRunner:
         """`V12WindowDataset._build`'s inference geometry, vectorised over
         centres. T=1 only (`temporal="none"`, the only mode this runner
         supports).
-
-        `frames` (C,H,W,3) uint8 RGB in `self.cameras` order, `present` (C,)
-        bool, `centres` (B,3) in WORLD units.
-
-        Returns crops (B,1,C,448,448,3) u8, cam_valid (B,1,C) bool,
-        M (B,C,2,3) f32, t_local (B,1,C,2) f32, origin (B,C,2) i32,
-        centres (B,3) f32.
         """
         frames = np.asarray(frames)
         if frames.ndim != 4 or frames.shape[0] != self.C:
@@ -424,9 +324,6 @@ class MVQRunner:
             jnp.asarray(prompt),
             jnp.asarray(prompt_on),
         )
-        # Calibration: every existence/visibility sigmoid below reads these
-        # TEMPERED logits, never the raw ones -- `assemble`'s internal
-        # exist-gate included, via `out_cal`.
         exist_logit = np.asarray(out["exist_logit"]) / self.exist_temperature
         vis_logit = np.asarray(out["vis_logit"]) / self.vis_temperature
         out_cal = dict(out)
@@ -468,17 +365,7 @@ class MVQRunner:
 
     # ------------------------------------------------------------------ reading slots
     def read_typed(self, out, bi, want_sex):
-        """The typed slot for one sex of window `bi`, or None below threshold.
-
-        `want_sex` is a `SEX_FEMALE`/`SEX_MALE`/`SEX_UNKNOWN` code and maps
-        to the FIXED P3a slot table: female -> `SLOT_FEMALE`, male ->
-        `SLOT_MALE` (slot 0 is the prompted slot, unused here; 3 is
-        "other"). No fallback and no guessing for a known sex.
-
-        `SEX_UNKNOWN` is the SINGLE-FLY rule: take whichever typed slot
-        exists -- the higher existence when both clear the threshold -- and
-        report its sex rather than assuming one.
-        """
+        """The typed slot for one sex of window `bi`, or None below threshold."""
         if self.I != N_SLOTS:
             raise ValueError(
                 f"this checkpoint has {self.I} instance slots, not the typed {N_SLOTS} "
@@ -510,13 +397,6 @@ class MVQRunner:
     def to_pipeline(self, kp3d, kp2d, vis, conf_raw):
         """Permute the keypoint axis of each (non-`None`) array from the
         model's own order into the pipeline's canonical order.
-
-        THE SINGLE PERMUTATION IN THIS REPO: `perm = model_order.
-        permutation_to(kp_order)`, computed once and applied to the keypoint
-        axis of `kp3d` (...,K,3), `kp2d` (...,K,2), `vis` (...,K) and
-        `conf_raw` (...,K). Everything returned is in canonical (`kp_order`)
-        order. Each input may be `None` (nothing to permute); returns a
-        4-tuple `(kp3d, kp2d, vis, conf_raw)` in the same order as given.
         """
         perm = self.model_order.permutation_to(self.kp_order)
         out = []
@@ -533,14 +413,6 @@ class MVQRunner:
     def gates_string(self):
         """This checkpoint's Stage-B `gates` payload as a stable string (see
         `tracking.detector.mvq.gates.gate_string`). Computed once and cached.
-
-        Deliberately does not pass `placement`/`placement_lag`/`no_merge`/
-        `min_vis`: those are mask-free coarse/fine-pass window-placement
-        knobs and this masked-route runner has no placement rule at all --
-        omitting them is `gate_string`'s own no-op default. A future
-        mask-free runner (built on top of `pick_typed_pair`'s own-window
-        tracking, not this class's `windows()`) MUST pass them here, or its
-        gate string will not move when its placement rule changes.
         """
         if self._gates is None:
             self._gates = gate_string(

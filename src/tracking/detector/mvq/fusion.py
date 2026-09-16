@@ -8,39 +8,7 @@ from flax import nnx
 
 
 def masked_attention(q, k, v, key_valid, num_heads, q_chunk: int | None = 512, impl: str = "xla"):
-    """q (B,Nq,D), k/v (B,Nk,D), key_valid (B,Nk) bool or None -> (B,Nq,D).
-
-    Materialising the full (B,heads,Nq,Nk) logits is the memory bottleneck of
-    every decoder block: at the shipped config the 2D path alone is
-    2100 queries x 10976 keys x 12 heads ~= 1.1GB per sample per layer. When
-    `q_chunk` is set and `Nq > q_chunk`, the query axis is processed in
-    chunks of `q_chunk` via `jax.lax.map` (sequential, not vmapped) so peak
-    logits are (B,heads,q_chunk,Nk) instead of (B,heads,Nq,Nk); math is
-    identical to the unchunked path because attention is independent per
-    query row, so chunking only trades memory for a bit of extra sequencing.
-
-    `key_valid=None` means every key is valid (no masking at all) -- used for
-    query self-attention, where there is no such thing as an invalid query.
-
-    `impl="cudnn"` instead routes to `mvq.attention.flash_attention`, which
-    never materialises attention LOGITS/softmax at all regardless of
-    `key_valid` (`q_chunk` is ignored in that branch -- chunking exists only
-    to bound logits memory, which cudnn never has). But when `key_valid` is
-    an explicit, arbitrary bool array (this decoder's real per-camera
-    validity -- invalid cameras are scattered through the sequence, not a
-    prefix/suffix, so they CANNOT be expressed as a single valid-length per
-    row), cuDNN turns that mask into a real bf16 additive bias tensor
-    (shape (B,1,Nq_pad,Nk_pad), broadcast over heads) plus a `dbias`
-    gradient of the same shape -- at the shipped 2D-path shape (2100 x
-    10976) that is ~46MB/sample each way. This is smaller than the never-
-    chunked logits tensor it replaces (~1.1GB/sample/layer, see above) and
-    is still exact, but it is not "nothing": only the backbone's `key_valid
-    =None` case (`dinov3.py`) reaches `attention.py`'s cheaper, bias-free
-    `key_value_seq_lengths` exclusion, because that mechanism only supports
-    a prefix-valid/suffix-invalid split per row (exactly what the
-    backbone's own even-length pad is, and exactly what this decoder's
-    scattered camera validity is not).
-    """
+    """q (B,Nq,D), k/v (B,Nk,D), key_valid (B,Nk) bool or None -> (B,Nq,D)."""
     B, Nq, D = q.shape
     Nk = k.shape[1]
     hd = D // num_heads
@@ -71,9 +39,6 @@ def masked_attention(q, k, v, key_valid, num_heads, q_chunk: int | None = 512, i
     q_pad = jnp.pad(q, ((0, 0), (0, pad), (0, 0))) if pad else q
     qh = q_pad.reshape(B, n_chunks, q_chunk, num_heads, hd)
     qh = jnp.moveaxis(qh, (1, 3), (0, 2))  # (n_chunks,B,heads,q_chunk,hd)
-    # jax.remat per chunk: lax.map's reverse-mode grad otherwise retains EVERY
-    # chunk's logits+softmax simultaneously (no forward-memory saving survives
-    # differentiation) -- measured 8.5GB -> 1.9GB for the 4-layer 2D stack at bs4.
     out = jax.lax.map(jax.remat(attend), qh)  # (n_chunks,B,heads,q_chunk,hd)
     out = jnp.moveaxis(out, (0, 2), (1, 3))  # (B,n_chunks,q_chunk,heads,hd)
     return out.reshape(B, n_chunks * q_chunk, D)[:, :Nq]
@@ -88,10 +53,6 @@ class Attn(nnx.Module):
     def __init__(self, D, heads, *, rngs, q_chunk: int | None = 512, impl: str = "xla"):
         self.q, self.k, self.v, self.o = (nnx.Linear(D, D, rngs=rngs) for _ in range(4))
         self.heads = heads
-        # Construction-time defaults for callers (FusionStack) that don't override
-        # per call; decoder.py's CrossBlock always passes q_chunk/impl explicitly
-        # at call time instead, so its Attn's construction-time values (left at
-        # the class defaults above) are never actually used.
         self.q_chunk = q_chunk
         self.impl = impl
 
