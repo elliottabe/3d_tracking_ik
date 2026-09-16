@@ -33,7 +33,7 @@ def _check_keypoints(root, out):
         return schema.keypoint_order(root)
     except OrderMismatch as exc:
         out.append(_err("keypoint_names_mismatch", str(exc)))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, KeyError) as exc:
         out.append(_err("keypoint_names_unreadable", str(exc)))
     return None
 
@@ -46,7 +46,7 @@ def _check_calibrations(root, out):
             continue
         try:
             rig = CameraRig.from_calib_dir(group_dir)
-        except (OrderMismatch, ValueError, OSError) as exc:
+        except (OrderMismatch, ValueError, OSError, SystemError) as exc:
             out.append(_err("calibration_unreadable", f"{group_dir.name}: {exc}"))
             continue
         names_seen[group_dir.name] = rig.cameras.names
@@ -65,15 +65,20 @@ def _check_calibrations(root, out):
 
 
 def _check_split(root, split, kp_order, sources, out):
+    """Load and check one split's instances file.
+
+    A corrupt or structurally-invalid split file is reported by `_check_keypoints`
+    (it reads the same file); here we just avoid re-raising the same failure.
+    """
     try:
         coco = schema.load_instances(root, split)
-    except FileNotFoundError:
+    except (OSError, json.JSONDecodeError):
         return
-    images = {i["id"]: i for i in coco["images"]}
-    anns = {a["id"]: a for a in coco["annotations"]}
+    images = {i["id"]: i for i in coco.get("images", [])}
+    anns = {a["id"]: a for a in coco.get("annotations", [])}
     n_kp = len(kp_order) if kp_order is not None else None
 
-    for a in coco["annotations"]:
+    for a in coco.get("annotations", []):
         if n_kp is not None and len(a.get("keypoints", [])) != 3 * n_kp:
             out.append(
                 _err(
@@ -84,16 +89,19 @@ def _check_split(root, split, kp_order, sources, out):
             )
             break
 
-    for rel, img_id in ((i["file_name"], i["id"]) for i in coco["images"]):
+    for rel, img_id in ((i["file_name"], i["id"]) for i in coco.get("images", [])):
         p = Path(root) / "images" / rel
         if p.is_symlink():
             out.append(_err("image_is_symlink", f"{split} image {img_id}: {rel} is a symlink"))
             break
-        if not p.exists():
+
+    for rel, img_id in ((i["file_name"], i["id"]) for i in coco.get("images", [])):
+        p = Path(root) / "images" / rel
+        if not p.is_symlink() and not p.exists():
             out.append(_err("image_missing", f"{split} image {img_id}: {rel} not on disk"))
             break
 
-    for key, fs in coco["framesets"].items():
+    for key, fs in coco.get("framesets", {}).items():
         frames, ann_ids = fs.get("frames", []), fs.get("ann_ids", [])
         if len(frames) != len(ann_ids):
             out.append(
@@ -120,7 +128,7 @@ def _check_split(root, split, kp_order, sources, out):
         if sid is not None and sid not in sources:
             out.append(_err("unknown_source_id", f"{key}: source_id {sid!r} not in manifest"))
 
-    per_image = Counter(a["image_id"] for a in coco["annotations"])
+    per_image = Counter(a["image_id"] for a in coco.get("annotations", []))
     n_zero = len(images) - len(per_image)
     n_two = sum(1 for v in per_image.values() if v >= 2)
     if n_zero:

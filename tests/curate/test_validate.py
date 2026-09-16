@@ -100,3 +100,53 @@ def test_format_findings_mentions_every_error(make_tier):
     (root / "annotations" / "keypoint_names.json").write_text(json.dumps(["A"]))
     text = validate.format_findings(validate.validate_root(root))
     assert "keypoint_names_mismatch" in text
+
+
+def test_corrupt_split_json_does_not_crash(make_tier):
+    root = make_tier("t")
+    (root / "annotations" / "instances_train.json").write_text("{not valid json")
+    assert "keypoint_names_unreadable" in codes(validate.validate_root(root), "error")
+
+
+def test_split_json_missing_keypoint_names_key_is_unreadable(make_tier):
+    root = make_tier("t")
+    coco = json.loads((root / "annotations" / "instances_train.json").read_text())
+    del coco["keypoint_names"]
+    (root / "annotations" / "instances_train.json").write_text(json.dumps(coco))
+    assert "keypoint_names_unreadable" in codes(validate.validate_root(root), "error")
+
+
+def test_split_missing_images_key_does_not_crash(make_tier):
+    root = make_tier("t")
+    coco = json.loads((root / "annotations" / "instances_train.json").read_text())
+    del coco["images"]
+    (root / "annotations" / "instances_train.json").write_text(json.dumps(coco))
+    findings = validate.validate_root(root)
+    assert isinstance(findings, list)
+
+
+def test_corrupt_calibration_file_is_unreadable(make_tier):
+    root = make_tier("t")
+    (root / "calibrations" / "A" / "Cam01.yaml").write_bytes(b"\x00\x01garbage not yaml at all")
+    assert "calibration_unreadable" in codes(validate.validate_root(root), "error")
+
+
+def test_corrupt_manifest_is_unreadable(make_tier):
+    root = make_tier("t")
+    (root / "manifest.json").write_text("{not valid json")
+    assert "manifest_unreadable" in codes(validate.validate_root(root), "error")
+
+
+def test_symlink_and_missing_image_are_both_reported(make_tier, tmp_path):
+    root = make_tier("t", n_frames=2)
+    coco = json.loads((root / "annotations" / "instances_train.json").read_text())
+    images = coco["images"]
+    rel_symlink = images[0]["file_name"]
+    target = tmp_path / "elsewhere.jpg"
+    (root / "images" / rel_symlink).rename(target)
+    (root / "images" / rel_symlink).symlink_to(target)
+    rel_missing = images[3]["file_name"]
+    (root / "images" / rel_missing).unlink()
+    found = codes(validate.validate_root(root), "error")
+    assert "image_is_symlink" in found
+    assert "image_missing" in found
