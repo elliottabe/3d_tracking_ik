@@ -1,5 +1,7 @@
 # 3d_tracking_ik
 
+Multi-animal 3D tracking pipeline for [Whole-body 3D kinematics of freely behaving Drosophila](https://www.biorxiv.org/content/10.64898/2026.05.03.722293)
+
 Mask-free multi-camera fly tracking to articulated IK fits. Raw video from a
 calibrated multi-camera rig goes in; per-frame joint angles for a MuJoCo
 *Drosophila* body model come out.
@@ -9,7 +11,7 @@ video + calibration
   → coarse   sweep the recording at a wide stride, locate each fly
   → gates    turn coarse tracks into a bout table   (or: bouts, from a supplied CSV)
   → fine     lift every frame of each bout to 50 3D landmarks
-  → kpvideo  render the lift over the raw views
+  → kpvideo  render the lift over the raw views (visualization)
   → preprocess   gate, interpolate and smooth the landmark trajectories
   → fit_fly_constants / fit_run_floor   per-fly body scale and marker offsets, arena floor
   → ik       per-frame Levenberg-Marquardt fit of the body model
@@ -58,7 +60,7 @@ The two detector checkpoints are too large to ship in this repository and are
 archived separately:
 
 > **Data availability.** Model checkpoints (MVQ v2, 782 MB; CenterDetect,
-> 8.9 MB) are deposited at `[ZENODO DOI — fill in]`.
+> 8.9 MB) are deposited at [here](https://drive.google.com/drive/folders/1flBiyFmJYWPA6EIN4Xoh_2Lc5VT2_AoV?usp=drive_link).
 
 Download and unpack them, then point `paths.ckpt_dir` at the directory that
 holds `jax_mvq_runs/` and `jax_centerdetect_runs/`. To verify placement before
@@ -175,4 +177,20 @@ timing.json                 per-stage wall clock and GPU hours
 
 ## Citation
 
-If you use this pipeline, please cite `[CITATION — fill in]`.
+If you use this pipeline, please cite the paper:
+
+```bibtex
+@article{ispizua_wholebody_2026,
+  author  = {Ispizua, J. I. and Abe, E. T. T. and Yan, J. and Othayoth, R. and
+             Sawtelle, S. and Atkins, F. and Shiozaki, H. and Meier, N. R. and
+             Wong, J. and Tran, T. T. and Mori, C. K. and Voigts, J. and
+             Stern, D. L. and Brunton, B. W. and Tuthill, J. C. and
+             Johnson, R. E.},
+  title   = {Whole-body {3D} kinematics of freely behaving \textit{Drosophila}},
+  journal = {bioRxiv},
+  year    = {2026},
+  doi     = {10.64898/2026.05.03.722293},
+  url     = {https://doi.org/10.64898/2026.05.03.722293},
+  note    = {J. I. Ispizua and E. T. T. Abe contributed equally}
+}
+```
