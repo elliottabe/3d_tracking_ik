@@ -1,6 +1,7 @@
 import json
 
 import numpy as np
+import pytest
 
 from tracking.curate.masks.adapter import import_masks
 from tracking.curate.masks.store import MaskStore, sidecar_path
@@ -46,3 +47,48 @@ def test_import_masks_copies_npz_tree(tmp_path):
     summary = import_masks(tmp_path / "src", tmp_path / "out_masks", tool="sam3")
     assert summary["n_files"] == 1
     assert MaskStore(tmp_path / "out_masks").has("rec", "Cam01", 7)
+
+
+def test_load_returns_none_for_missing_file(tmp_path):
+    store = MaskStore(tmp_path / "m")
+    assert store.load("rec", "Cam01", 7, 11) is None
+
+
+def test_import_masks_rejects_missing_ann_ids_key(tmp_path):
+    src = tmp_path / "src" / "rec" / "Cam01"
+    src.mkdir(parents=True)
+    np.savez_compressed(src / "Frame_7.npz", masks=np.zeros((1, 2, 2), bool))
+    with pytest.raises(ValueError, match="needs 'ann_ids' and 'masks' arrays"):
+        import_masks(tmp_path / "src", tmp_path / "out_masks", tool="sam3")
+
+
+def test_import_masks_rejects_missing_masks_key(tmp_path):
+    src = tmp_path / "src" / "rec" / "Cam01"
+    src.mkdir(parents=True)
+    np.savez_compressed(src / "Frame_7.npz", ann_ids=np.array([11]))
+    with pytest.raises(ValueError, match="needs 'ann_ids' and 'masks' arrays"):
+        import_masks(tmp_path / "src", tmp_path / "out_masks", tool="sam3")
+
+
+def test_import_masks_rejects_length_mismatch(tmp_path):
+    src = tmp_path / "src" / "rec" / "Cam01"
+    src.mkdir(parents=True)
+    np.savez_compressed(
+        src / "Frame_7.npz",
+        ann_ids=np.array([11, 12]),
+        masks=np.zeros((1, 2, 2), bool),
+    )
+    with pytest.raises(ValueError, match="ann_ids and masks disagree in length"):
+        import_masks(tmp_path / "src", tmp_path / "out_masks", tool="sam3")
+
+
+def test_import_masks_rejects_wrong_path_depth(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir(parents=True)
+    np.savez_compressed(
+        src / "Frame_7.npz", ann_ids=np.array([11]), masks=np.zeros((1, 2, 2), bool)
+    )
+    out = tmp_path / "out_masks"
+    with pytest.raises(ValueError, match="expected <recording>/<camera>/Frame_<n>.npz"):
+        import_masks(src, out, tool="sam3")
+    assert not out.exists()
