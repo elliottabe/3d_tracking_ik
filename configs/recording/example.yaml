@@ -1,0 +1,46 @@
+# The shipped example: ONE courtship bout, so a new install can be run end to
+# end without the 87 GB of raw video a real session needs. Setup and caveats
+# are in `data/example_bout/README.md`.
+#
+#   python -m tracking.run recording=example dry_run=true
+#   python -m tracking.run recording=example bout_ids=[4] \
+#       stages=[bouts,fine,kpvideo,preprocess,ik,postprocess,sidebyside,collect] \
+#       run.name=example run.root=${repo_root:}/data/example_bout_out
+
+# Must equal `bout_summary.csv`'s `fly_id` column exactly -- it is the
+# `session_tag` that `io.bouts.read_bout_summary` filters on. Both are written
+# from one constant in `scripts/make_example_clips.py`.
+name: "Example/2026_04_02_16_03_48_bout04"
+
+assay: courtship
+
+# `${repo_root:}`, not `${paths.data_dir}`: the example then resolves under any
+# `paths=` selection, so a first run needs only `ckpt_dir` to be correct. The
+# directory itself is gitignored and distributed as `example_bout_clips.zip`.
+session_dir: "${repo_root:}/data/example_bout"
+calib_dir: "${recording.session_dir}/calibration"
+
+# sorted(glob("Cam*.yaml")) order -- the source recording's 7-camera rig,
+# copied verbatim with the calibration these clips were shot under.
+cameras:
+  - Cam2012630
+  - Cam2012631
+  - Cam2012853
+  - Cam2012855
+  - Cam2012857
+  - Cam2012861
+  - Cam2012862
+
+num_animals: 2
+
+# Inherited from the source recording. The mp4 container's `r_frame_rate` says
+# 1600/1 and is wrong -- `avg_frame_rate` (800.0006) and the source's
+# `*_meta.csv` timestamps (1.25 ms) both give 800. Do not "correct" it from the
+# container: `fps` sets `source_hz` and the IK's `dt`, so 2x here is 2x on every
+# velocity.
+fps: 800.0
+
+# Frames here are CLIP-LOCAL. The stream copy starts at GOP keyframe 464800 and
+# bout 4 runs 464836..465561 in the source, so this table says 36..761; the bout
+# keeps index 4. `data/example_bout/clip_manifest.json` records the offset.
+bouts_csv: "${recording.session_dir}/bout_summary.csv"

@@ -60,7 +60,9 @@ The two detector checkpoints are too large to ship in this repository and are
 archived separately:
 
 > **Data availability.** Model checkpoints (MVQ v2, 782 MB; CenterDetect,
-> 8.9 MB) are deposited at [here](https://drive.google.com/drive/folders/1flBiyFmJYWPA6EIN4Xoh_2Lc5VT2_AoV?usp=drive_link).
+> 8.9 MB) and the example bout's video clips (`example_bout_clips.zip`,
+> 105 MB — see [Try it on one bout](#try-it-on-one-bout)) are deposited at
+> [here](https://drive.google.com/drive/folders/1flBiyFmJYWPA6EIN4Xoh_2Lc5VT2_AoV?usp=drive_link).
 
 Download and unpack them, then point `paths.ckpt_dir` at the directory that
 holds `jax_mvq_runs/` and `jax_centerdetect_runs/`. To verify placement before
@@ -98,6 +100,45 @@ example.
 
 Calibration is read from the recording's own `calibration/` directory: one
 `Cam*.yaml` per camera, holding a DLT projection matrix.
+
+## Try it on one bout
+
+A single courtship bout ships as a self-contained example, so a new install
+can be exercised end to end without the 87 GB of raw video a real session
+needs: seven synchronised camera clips (726 frames of two flies at 800 Hz),
+the calibration they were shot under, and the outputs a reference run
+produced from exactly these pixels.
+
+The clips are ~105 MB and live outside git — download
+`example_bout_clips.zip` from the same folder as the model checkpoints and
+unpack it into `data/example_bout/`, then:
+
+```bash
+python -m tracking.run recording=example paths=mymachine \
+    bout_ids=[4] \
+    stages=[bouts,fine,kpvideo,preprocess,ik,postprocess,sidebyside,collect] \
+    run.name=example run.root='${repo_root:}/data/example_bout_out'
+```
+
+That runs the whole chain — lift, both renders, per-frame IK, and the combined
+dataset — in about 18 minutes on one L40S, and produces every artifact the
+**Outputs** section below lists.
+
+`recording=example` resolves `session_dir` through `${repo_root:}`, so the
+example runs identically under any `paths=` selection — only `ckpt_dir` has
+to be right. `stages=[bouts,...]` takes the supplied-bout-table route rather
+than `coarse`/`gates`, which on 800 frames have nothing to find.
+
+The clips are a stream copy of the source video, not a re-encode, so the lift
+sees pixels bit-identical to the source recording, and the lift is
+deterministic — two runs on these clips agree exactly. Fitting to a single
+bout pools body scale, marker offsets and floor over one bout rather than a
+whole recording, so the numbers differ a little from a full-session run; that
+is expected, not a fault. Check the run on its own terms — the `kpvideo`
+overlay and `session_qc.md` — as `data/example_bout/README.md` describes.
+
+`scripts/make_example_clips.py` is what cut the package, and rebuilds it from
+the source recording if you have access to one.
 
 ## Run
 

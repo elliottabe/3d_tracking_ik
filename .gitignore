@@ -238,3 +238,17 @@ slurm-*.err
 .superpowers/
 Archive/
 .claude/
+
+# The example bout package (data/example_bout/), ~105 MB of h264 that zip
+# cannot compress further. The whole directory is distributed as
+# `example_bout_clips.zip` rather than tracked here -- the archive is
+# self-contained (clips, calibration, bout table, README), and
+# `scripts/make_example_clips.py` rebuilds it from the source recording.
+# The last rule covers the directory; the two above it are subsumed by it and
+# kept only so the intent stays legible if it is ever narrowed again.
+data/example_bout/*.mp4
+data/example_bout/reference/
+data/example_bout_clips.zip
+# Output root suggested by the README's example invocation.
+data/example_bout_out/
+data/example_bout/
