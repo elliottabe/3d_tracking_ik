@@ -37,7 +37,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["ruff"]
+dev = ["ruff", "pytest"]
 # Notebook_figures/Figure_4 only; the pipeline in src/ needs neither. Kept out
 # of the core list so a pipeline install does not pay for them.
 figures = [
@@ -99,3 +99,7 @@ extend-exclude = ["*.md"]
 [tool.ruff.lint]
 # E/W: pycodestyle, F: pyflakes, I: isort, UP: pyupgrade, B: bugbear
 select = ["E", "W", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
