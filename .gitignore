@@ -224,6 +224,11 @@ multirun/
 
 figures/
 Outfiles
+# Figure outputs and their stage cache: all regenerable from the h5 by
+# `python make_figure4.py`, and 12 MB per rebuild.
+Notebook_figures/*/cache/
+Notebook_figures/*/*.png
+Notebook_figures/*/*.svg
 slurm_logs/
 # sbatch's default per-job log, written to the submitting cwd when a job
 # sets no --output. Array jobs add one per task.

@@ -26,10 +26,37 @@ dependencies = [
     # repo's environment was built from.
     "jaxls @ git+https://github.com/brentyi/jaxls.git@5f766d3b09364a96d83497de2325a835d0e23dc4",
     "jaxlie", "jax_dataclasses", "termcolor",
+    # PyYAML: read directly by scripts/viz/filter_rigidity_check.py and by the
+    # Figure 4 notebook's anatomy-config loader. Same class of defect as the
+    # matplotlib note above -- it was satisfied only transitively (flax,
+    # omegaconf, huggingface_hub all pull it in), so a resolver change could
+    # have dropped it out from under code that imports it by name.
+    "PyYAML",
 ]
 
 [project.optional-dependencies]
 dev = ["ruff"]
+# Notebook_figures/Figure_4 only; the pipeline in src/ needs neither. Kept out
+# of the core list so a pipeline install does not pay for them.
+figures = [
+    # scikit-learn: the Pslow/Pfast pulse classifier (PCA + GaussianMixture)
+    # behind Figure 4's panel F.
+    "scikit-learn",
+    # mujoco_visualizer: the styled two-fly render behind panel H. Not on
+    # PyPI, so it is pinned by commit the way jaxls is -- and pinned rather
+    # than tracking main because the panel's appearance depends on its
+    # `Earthy_V1_courtship_fly0/fly1` presets. Bump the sha deliberately, and
+    # re-read panel H afterwards. A local editable checkout still wins for
+    # development.
+    "mujoco_visualizer @ git+https://github.com/elliottabe/mujoco_visualizer.git@47aab238fb34eb07b58d21dcf20342171c4e6ba0",
+]
+
+[tool.hatch.metadata]
+# Two dependencies are git URLs rather than PyPI names -- jaxls (whose PyPI
+# name is taken by an unrelated package) and mujoco_visualizer (not published).
+# Hatchling refuses direct references without this, so `pip wheel .` failed on
+# the jaxls line long before the second one was added.
+allow-direct-references = true
 
 [tool.hatch.version]
 path = "src/tracking/__init__.py"
