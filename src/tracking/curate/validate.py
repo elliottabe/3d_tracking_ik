@@ -65,15 +65,14 @@ def _check_calibrations(root, out):
 
 
 def _check_split(root, split, kp_order, sources, out):
-    """Load and check one split's instances file.
-
-    A corrupt or structurally-invalid split file is reported by `_check_keypoints`
-    (it reads the same file); here we just avoid re-raising the same failure.
-    """
+    """Check one split's instances file; corrupt JSON is already reported by `_check_keypoints`."""
     try:
         coco = schema.load_instances(root, split)
     except (OSError, json.JSONDecodeError):
         return
+    missing_keys = [k for k in ("images", "annotations", "framesets") if k not in coco]
+    if missing_keys:
+        out.append(_err("split_missing_keys", f"{split}: missing key(s) {missing_keys}"))
     images = {i["id"]: i for i in coco.get("images", [])}
     anns = {a["id"]: a for a in coco.get("annotations", [])}
     n_kp = len(kp_order) if kp_order is not None else None
@@ -129,7 +128,7 @@ def _check_split(root, split, kp_order, sources, out):
             out.append(_err("unknown_source_id", f"{key}: source_id {sid!r} not in manifest"))
 
     per_image = Counter(a["image_id"] for a in coco.get("annotations", []))
-    n_zero = len(images) - len(per_image)
+    n_zero = max(0, len(images) - len(per_image))
     n_two = sum(1 for v in per_image.values() if v >= 2)
     if n_zero:
         out.append(

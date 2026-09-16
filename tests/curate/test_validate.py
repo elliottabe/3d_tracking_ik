@@ -150,3 +150,29 @@ def test_symlink_and_missing_image_are_both_reported(make_tier, tmp_path):
     found = codes(validate.validate_root(root), "error")
     assert "image_is_symlink" in found
     assert "image_missing" in found
+
+
+def test_split_missing_framesets_key_is_an_error(make_tier):
+    root = make_tier("t")
+    coco = json.loads((root / "annotations" / "instances_train.json").read_text())
+    del coco["framesets"]
+    (root / "annotations" / "instances_train.json").write_text(json.dumps(coco))
+    assert "split_missing_keys" in codes(validate.validate_root(root), "error")
+
+
+def test_split_missing_all_structural_keys_names_them_all(make_tier):
+    root = make_tier("t")
+    coco = json.loads((root / "annotations" / "instances_train.json").read_text())
+    del coco["images"]
+    del coco["annotations"]
+    del coco["framesets"]
+    (root / "annotations" / "instances_train.json").write_text(json.dumps(coco))
+    findings = [f for f in validate.validate_root(root) if f.code == "split_missing_keys"]
+    assert len(findings) == 1
+    for key in ("images", "annotations", "framesets"):
+        assert key in findings[0].message
+
+
+def test_empty_but_present_split_keys_are_not_missing_keys(make_tier):
+    root = make_tier("t")
+    assert "split_missing_keys" not in codes(validate.validate_root(root), "error")
