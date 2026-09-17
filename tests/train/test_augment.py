@@ -5,6 +5,8 @@ import pytest
 
 from tracking.train.data.augment import (
     MVAugParams,
+    _per_view_affine,
+    _photometric,
     assert_lr_swap_covers,
     augment_window,
     build_lr_swap,
@@ -169,3 +171,22 @@ def test_geometric_augmentation_preserves_the_reprojection_invariant():
         err = np.linalg.norm(uv - out["kp2d"][0, 0].transpose(1, 0, 2), axis=-1)
         assert ok.any()
         assert np.median(err[ok]) < 1.0
+
+
+def test_photometric_changes_pixels():
+    s = _sample()
+    out = _photometric(s, MVAugParams(), np.random.default_rng(0))
+    delta = np.abs(out["crops"].astype(int) - s["crops"].astype(int))
+    assert out["crops"].dtype == np.uint8
+    assert (delta > 0).mean() > 0.9
+    assert delta.max() > 20
+
+
+def test_per_view_affine_warps_the_donor_mask():
+    s = _sample(crop=CROP)
+    s["donor_mask"][:, :, 200:248, 200:248] = True
+    p = MVAugParams(rot_deg=30.0, scale_min=1.0, scale_max=1.0, translate_frac=0.0)
+    out = _per_view_affine(s, p, np.random.default_rng(0))
+    assert out["donor_mask"].dtype == np.bool_
+    assert not np.array_equal(out["donor_mask"], s["donor_mask"])
+    assert 0.9 < out["donor_mask"].sum() / s["donor_mask"].sum() < 1.1

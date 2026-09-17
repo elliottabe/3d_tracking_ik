@@ -5,13 +5,16 @@ from __future__ import annotations
 
 import dataclasses
 
+import cv2
 import numpy as np
-from scipy.ndimage import map_coordinates
-from scipy.signal import convolve2d
 
 from tracking.detector.mvq.geometry import mirror_world, px_scale, rotate_world
 from tracking.io.names import Order
 from tracking.train.data.windows import CROP
+
+BLUR_SIGMA = 1.0
+BLUR_KSIZE = (5, 5)
+BLUR_EPS = 1e-3
 
 
 @dataclasses.dataclass
@@ -92,31 +95,22 @@ def _forward_affine(theta, s, tx, ty, c=(CROP - 1) / 2.0):
     return A.astype(np.float32), b.astype(np.float32)
 
 
-def _warp_rgb(img, A, b):
-    """Warp (H,W,ch) uint8 by the FORWARD map (A,b): output pixel q samples input A^-1 (q - b)."""
+def _warp_rgb(img, A, b, flags=cv2.INTER_LINEAR):
+    """Warp (H,W,ch) uint8 by the FORWARD map (A,b): output pixel q samples input A^-1 (q - b).
+
+    >>> _warp_rgb(np.zeros((4, 4, 3), np.uint8), np.eye(2, dtype=np.float32), np.zeros(2)).shape
+    (4, 4, 3)
+    """
     H, W = img.shape[:2]
-    Ai = np.linalg.inv(A)
-    ys, xs = np.meshgrid(
-        np.arange(H, dtype=np.float32), np.arange(W, dtype=np.float32), indexing="ij"
+    M = np.concatenate([np.asarray(A, np.float64), np.asarray(b, np.float64)[:, None]], axis=1)
+    return cv2.warpAffine(
+        img, M, (W, H), flags=flags, borderMode=cv2.BORDER_CONSTANT, borderValue=0
     )
-    q = np.stack([xs, ys], -1) - b
-    src = q @ Ai.T
-    coords = [src[..., 1], src[..., 0]]
-    out = np.stack(
-        [
-            map_coordinates(
-                img[..., ch].astype(np.float32), coords, order=1, mode="constant", cval=0.0
-            )
-            for ch in range(img.shape[-1])
-        ],
-        -1,
-    )
-    return np.clip(np.round(out), 0, 255).astype(np.uint8)
 
 
 def _warp_mask(mask, A, b):
-    m = mask[..., None].astype(np.uint8) * 255
-    return _warp_rgb(m, A, b)[..., 0] > 127
+    m = mask.astype(np.uint8) * 255
+    return _warp_rgb(m, A, b, flags=cv2.INTER_NEAREST) > 127
 
 
 def _per_view_affine(sample, params: MVAugParams, rng):
@@ -212,13 +206,6 @@ def _camera_dropout(sample, params: MVAugParams, rng):
     return {**sample, "cam_valid": cam_valid, "vis2d": vis2d}
 
 
-def _gauss_kernel2d(ksize, sigma):
-    ax = np.arange(ksize, dtype=np.float32) - (ksize - 1) / 2.0
-    g = np.exp(-(ax**2) / (2.0 * sigma**2))
-    g = g / g.sum()
-    return np.outer(g, g)
-
-
 def _photometric(sample, params: MVAugParams, rng):
     """Independent brightness/contrast/gamma/blur/noise/per-channel colour
     jitter on every (T, C) crop -- each view gets its own random strength."""
@@ -233,21 +220,12 @@ def _photometric(sample, params: MVAugParams, rng):
     flat = np.clip((flat - mean) * c + mean + b, 0.0, 1.0) ** g
 
     if params.blur_max > 0:
-        k = _gauss_kernel2d(5, 1.0)
-        blurred = np.stack(
-            [
-                np.stack(
-                    [
-                        convolve2d(flat[n, ..., ch], k, mode="same", boundary="fill")
-                        for ch in range(3)
-                    ],
-                    -1,
-                )
-                for n in range(N)
-            ]
-        )
         alpha = rng.uniform(0.0, params.blur_max, size=(N, 1, 1, 1)).astype(np.float32)
-        flat = (1.0 - alpha) * flat + alpha * blurred
+        for n in np.nonzero(alpha.reshape(N) > BLUR_EPS)[0]:
+            blurred = cv2.GaussianBlur(
+                flat[n], BLUR_KSIZE, BLUR_SIGMA, borderType=cv2.BORDER_CONSTANT
+            )
+            flat[n] = (1.0 - alpha[n]) * flat[n] + alpha[n] * blurred
 
     if params.noise_scale > 0:
         scale = rng.uniform(0.0, params.noise_scale, size=(N, 1, 1, 1)).astype(np.float32)
