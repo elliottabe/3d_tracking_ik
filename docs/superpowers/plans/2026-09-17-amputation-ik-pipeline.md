@@ -81,12 +81,25 @@ def test_amputation_recording_is_rigless_and_single_fly():
 
 
 def test_amputation_recording_id_override_flows_into_every_path():
-    cfg = _compose("recording=amputation", "recording.id=2026_07_09_10_22_32")
+    # SINGLE-QUOTED, exactly as scripts/slurm/amputation_array.sh emits it.
+    cfg = _compose("recording=amputation", "recording.id='2026_07_09_10_22_32'")
     assert cfg.recording.name == "2026_07_09_10_22_32"
     assert cfg.recording.bouts_csv.endswith(
         "/2026_07_09_10_22_32/running_bouts_summary.csv"
     )
     assert cfg.recording.kp3d_csv.endswith("/2026_07_09_10_22_32/data3D.csv")
+
+
+def test_unquoted_recording_id_is_mangled_into_an_int():
+    """The trap the slurm script quotes around, pinned as a regression test.
+
+    Hydra's override grammar reads an all-digits-and-underscores value as a
+    Python int literal and drops every underscore, so an unquoted id silently
+    becomes a recording that never existed.
+    """
+    cfg = _compose("recording=amputation", "recording.id=2026_07_09_10_22_32")
+    assert cfg.recording.id == 20260709102232
+    assert not str(cfg.recording.kp3d_csv).endswith("/2026_07_09_10_22_32/data3D.csv")
 
 
 def test_ik_amputation_inherits_per_frame_and_adds_freeze():
@@ -139,7 +152,7 @@ If the dev extra does not exist yet, add `dev = ["ruff", "pytest"]` under `[proj
 # Parameterized on `id` like session1.yaml -- every other field is identical
 # across the cohort (verified on disk 2026-09-17).
 
-id: 2026_07_06_16_55_07
+id: "2026_07_06_16_55_07"
 
 name: "${recording.id}"
 assay: amputation
@@ -198,12 +211,13 @@ freeze_dof_patterns: []
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_amputation_config.py -v`
-Expected: 7 passed.
+Expected: 9 passed (5 plain tests + the 3-way parametrized `test_existing_recordings_still_compose` + the new unquoted-id regression test).
 
 - [ ] **Step 6: Lint and commit**
 
 ```bash
-ruff check . && ruff format --check .
+# Scoped: Notebook_figures/*.ipynb carries 784 pre-existing ruff errors on main.
+ruff check src tests scripts configs && ruff format --check src tests
 git add pyproject.toml configs/recording/amputation.yaml configs/ik/amputation.yaml configs/ik/default.yaml tests/test_amputation_config.py
 git commit -m "$(cat <<'EOF'
 feat(config): amputation recording group, frozen-T1L ik group, pytest harness
