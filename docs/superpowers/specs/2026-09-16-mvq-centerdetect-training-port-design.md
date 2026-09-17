@@ -151,6 +151,7 @@ retrain should be able to produce one.
 ```
 src/tracking/curate/            # data curation — its own Hydra root and stages
   run.py  stages.py             # python -m tracking.curate, resume-by-artifact
+                                 # (not implemented in Plan 1; stages always re-run)
   merge.py                      # tiers -> one unified root (dereferences symlinks)
   validate.py                   # the checker behind scripts/check_training_root.py
   package.py                    # tiered zip + CHECKSUMS + DATASET.md
@@ -336,7 +337,7 @@ table, counts, licence and citation. Tiers: `--tier human` (~4.2 G),
 ## 6. Curation stages
 
 `python -m tracking.curate`, resume-by-artifact in the idiom of
-`tracking.pipeline.stages`.
+`tracking.pipeline.stages` (not implemented in Plan 1; stages always re-run).
 
 | Stage | Input | Output |
 | --- | --- | --- |

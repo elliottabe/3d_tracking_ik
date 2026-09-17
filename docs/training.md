@@ -46,7 +46,7 @@ it):
 | `ann_ids` | parallel to `frames`; `null` where a camera did not resolve |
 | `source_id` | key into `manifest.sources` (see below) |
 | `source`, `weight`, `role`, `stratum`, `gates`, `partners` | carried through from the tier that contributed the frameset |
-| `center3D` | **required only on negative framesets** (`fly_id: -1`); positives derive it from their 3D labels |
+| `center3D` | **required only on negative framesets** (`fly_id < 0`); positives derive it from their 3D labels |
 
 Rules the format enforces:
 
@@ -117,8 +117,8 @@ Hydra config: `configs/curate.yaml` (`stages`, `dry_run`, `paths`) and
 | `package` | `curate.out_root` | tiered zip + `CHECKSUMS` + `DATASET.md` |
 
 Stages resolve to dependency order regardless of the order given on the
-command line; the driver is resume-by-artifact, matching
-`tracking.pipeline.stages`.
+command line. There is no skip-if-exists check: every requested stage always
+re-runs in full.
 
 ```bash
 # see what would run without doing anything
