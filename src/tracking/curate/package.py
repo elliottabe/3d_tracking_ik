@@ -74,6 +74,8 @@ def package_root(root, out_zip, *, tier="all", masks_root=None) -> dict:
         for sid, s in manifest.get("sources", {}).items()
         if tier == "all" or s["kind"] == "human"
     }
+    if not keep:
+        raise ValueError(f"tier {tier!r} matches no sources; refusing to ship an empty archive")
     members: dict[str, Path] = {}
     staged: dict[str, bytes] = {}
     n_fs = n_img = 0
@@ -88,6 +90,9 @@ def package_root(root, out_zip, *, tier="all", masks_root=None) -> dict:
         n_img += len(sub["images"])
         for im in sub["images"]:
             members[f"images/{im['file_name']}"] = root / "images" / im["file_name"]
+
+    if n_fs == 0:
+        raise ValueError(f"tier {tier!r} has 0 framesets; refusing to ship an empty archive")
 
     staged["annotations/keypoint_names.json"] = (
         root / "annotations" / "keypoint_names.json"

@@ -69,6 +69,17 @@ def test_masks_tier_missing_sidecar_raises(make_tier, tmp_path):
         package_root(root, tmp_path / "masks.zip", tier="masks")
 
 
+def test_human_tier_with_no_human_sources_is_rejected(make_tier, tmp_path):
+    a = make_tier("a", recording="rec1")
+    out = tmp_path / "unified"
+    merge_tiers(
+        [TierSpec(a, "pseudo_v1", "pseudo", 0.3, checkpoint="/ckpt")],
+        out,
+    )
+    with pytest.raises(ValueError, match="no sources"):
+        package_root(out, tmp_path / "human.zip", tier="human")
+
+
 def test_masks_tier_counts_files(make_tier, tmp_path):
     root = build(make_tier, tmp_path)
     sidecar = sidecar_path(root)
