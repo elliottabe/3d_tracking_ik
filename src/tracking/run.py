@@ -246,6 +246,7 @@ def _execute(work: P.Work, cfg: DictConfig, ctx: dict[str, Any], bout_ids: list[
                 n_frames=int(cfg.preprocess.offsets.n_frames),
                 min_conf=float(cfg.preprocess.offsets.min_conf),
                 mad_k=float(cfg.preprocess.offsets.mad_k),
+                freeze_dof_patterns=_plain(cfg.ik.get("freeze_dof_patterns", [])),
             )
         return
 
@@ -284,6 +285,7 @@ def _execute(work: P.Work, cfg: DictConfig, ctx: dict[str, Any], bout_ids: list[
                 offsets=offsets,
                 scale=scale,
                 per_frame_cfg={**_plain(cfg.ik.per_frame), "dt": 1.0 / float(spec.fps)},
+                freeze_dof_patterns=_plain(cfg.ik.get("freeze_dof_patterns", [])),
             )
         return
 

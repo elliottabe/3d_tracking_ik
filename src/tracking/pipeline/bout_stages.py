@@ -5,7 +5,7 @@ from __future__ import annotations
 import functools
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -121,6 +121,7 @@ def fit_fly_constants(
     min_conf: float = OFFSETS_MIN_CONF,
     mad_k: float = OFFSETS_MAD_K,
     include_thorax: bool = False,
+    freeze_dof_patterns: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Fit ONE fly's body scale and marker offsets, pooled across every bout."""
     kp_order = anatomy.kp_order
@@ -163,7 +164,13 @@ def fit_fly_constants(
     )
 
     solver_cfg = _solver_cfg_from_anatomy(anatomy)
-    fit = fit_offsets(anatomy, sample.kp3d, scale=scale, solver_cfg=solver_cfg)
+    fit = fit_offsets(
+        anatomy,
+        sample.kp3d,
+        scale=scale,
+        solver_cfg=solver_cfg,
+        freeze_dof_patterns=freeze_dof_patterns,
+    )
 
     offsets_path = Path(run_root) / per_fly_offsets_name(fly)
     write_offsets_h5(
@@ -255,6 +262,7 @@ def ik_bout_fly(
     scale: float,
     per_frame_cfg: Mapping[str, Any],
     solve_mask: np.ndarray | None = None,
+    freeze_dof_patterns: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Solve ONE bout-fly's per-frame IK, writing `stac_ik.h5`."""
     bout_dir = Path(bout_dir)
@@ -273,6 +281,7 @@ def ik_bout_fly(
         settings=settings,
         per_frame_cfg=per_frame_cfg,
         solve_mask=solve_mask,
+        freeze_dof_patterns=freeze_dof_patterns,
     )
 
     stac_path = bout_dir / "stac_ik.h5"

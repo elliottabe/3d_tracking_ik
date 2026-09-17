@@ -16,7 +16,7 @@ import jax.numpy as jnp
 import mujoco
 import numpy as np
 
-from tracking.conventions import NotFit, plain_mapping
+from tracking.conventions import NotFit, announce, plain_mapping
 from tracking.inverse_kinematics.solver import (
     FREE_JOINT_NDOF,
     PerFrameSolver,
@@ -45,6 +45,9 @@ __all__ = [
     "write_stac_h5",
 ]
 
+# Note: `_qs_to_opt` is intentionally not exported -- it is an implementation
+# detail of `solve_bout` and the offsets fit, imported directly by name.
+
 # The six wing DOFs on v1, by NAME glob -- never by the qpos indices 7..12,
 # which are v1's alone (v2_3 maps the same slots onto LEGS).
 WING_DOF_PATTERNS: tuple[str, ...] = ("wing_*",)
@@ -58,6 +61,34 @@ _VALID_STARTS = ("wing_rest_left", "wing_rest_right", "wing_rest_both")
 def dof_mask(names_qpos: Sequence[str], patterns: Sequence[str]) -> np.ndarray:
     """`(nq,)` bool: qpos slots whose JOINT NAME matches any glob in `patterns`."""
     return np.array([any(fnmatch.fnmatch(n, p) for p in patterns) for n in names_qpos], dtype=bool)
+
+
+def _qs_to_opt(anatomy, patterns: Sequence[str] | None) -> np.ndarray:
+    """`(nq,)` bool: which qpos slots the solver may move.
+
+    A DOF with no keypoint observing it is not free information -- left
+    optimised it drifts under the temporal prior and lands in outputs.h5
+    looking like a measurement.
+    """
+    nq = int(anatomy.nq)
+    patterns = tuple(patterns or ())
+    if not patterns:
+        return np.ones(nq, dtype=bool)
+
+    frozen = dof_mask(anatomy.names_qpos, patterns)
+    if frozen.all():
+        raise ValueError(
+            f"freeze_dof_patterns {list(patterns)} froze all {nq} qpos slots; "
+            f"there is nothing left to solve"
+        )
+    if not frozen.any():
+        announce(
+            "perframe",
+            "_qs_to_opt",
+            f"freeze_dof_patterns {list(patterns)} matched no qpos slot, so NOTHING "
+            f"is frozen -- check them against anatomy.names_qpos",
+        )
+    return ~frozen
 
 
 def wing_dof_weights(names_qpos: Sequence[str], wing_weight: float) -> np.ndarray:
@@ -368,6 +399,7 @@ def solve_bout(
     settings: SolverSettings | None = None,
     per_frame_cfg: Mapping[str, Any] | None = None,
     solve_mask: np.ndarray | None = None,
+    freeze_dof_patterns: Sequence[str] = (),
 ) -> PerFrameResult:
     """Solve every frame of `kp3d_model` `(T, K, 3)` independently."""
     t_start = time.time()
@@ -472,7 +504,7 @@ def solve_bout(
         mjx_model=mjx_model,
         mjx_data=mjx_data,
         kp_data=kp_s,
-        qs_to_opt=np.ones(nq, bool),
+        qs_to_opt=_qs_to_opt(anatomy, freeze_dof_patterns),
         kp_weights=anatomy.kp_weights,
         lb=anatomy.lb,
         ub=anatomy.ub,
