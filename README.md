@@ -216,6 +216,20 @@ ik_output_combined_<anatomy>_<name>.h5    the combined dataset
 timing.json                 per-stage wall clock and GPU hours
 ```
 
+## Training data
+
+Training reads a single curated root that merges human labels with the
+pseudo-label tiers, each frameset carrying its own provenance. The format, the
+optional SAM mask sidecar, and the merge/validate/package tools are documented
+in [`docs/training.md`](docs/training.md).
+
+```bash
+python -m tracking.curate paths=mymachine stages=[merge,validate,package]
+python scripts/check_training_root.py <root>
+```
+
+This repository does not generate pseudo-labels; the tiers are inputs.
+
 ## Figures
 
 `Notebook_figures/` holds the paper figures: one notebook each for Figures 1,
