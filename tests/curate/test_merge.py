@@ -1,9 +1,11 @@
+import filecmp
 import json
 import os
 import shutil
 
 import numpy as np
 import pytest
+from PIL import Image
 
 from tracking.curate import schema
 from tracking.curate.masks.store import MaskStore, sidecar_path
@@ -358,3 +360,76 @@ def test_mask_collisions_across_multiple_destinations_stay_correct_under_the_poo
     assert np.array_equal(store.load("rec1", "Cam02", 100, b_fs["ann_ids"][1]), mask_b2)
     assert manifest["masks"]["collisions_merged"] == 2
     assert manifest["masks"]["files_written"] == 2
+
+
+def test_copy_image_skips_identical_existing_destination_without_decoding(tmp_path, monkeypatch):
+    src = tmp_path / "src.jpg"
+    src.write_bytes(b"payload")
+    dst = tmp_path / "out" / "src.jpg"
+    dst.parent.mkdir()
+    dst.write_bytes(b"payload")
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("Image.open should not be called on the byte-identical fast path")
+
+    monkeypatch.setattr(Image, "open", _boom)
+    assert _copy_image(src, dst) is False
+    assert dst.read_bytes() == b"payload"
+
+
+def _smooth_image(shape=(32, 32, 3)):
+    h, w, c = shape
+    yy, xx = np.mgrid[0:h, 0:w]
+    plane = 128 + 40 * np.sin(xx / 6) + 40 * np.cos(yy / 6)
+    return np.stack([plane] * c, axis=-1).astype(np.uint8)
+
+
+def test_copy_image_tolerates_a_reencoded_duplicate(tmp_path):
+    base = _smooth_image()
+    reencoded = np.clip(base.astype(np.int16) + 5, 0, 255).astype(np.uint8)
+    dst = tmp_path / "out" / "frame.jpg"
+    dst.parent.mkdir()
+    Image.fromarray(base).save(dst, quality=90)
+    dst_bytes_before = dst.read_bytes()
+    src = tmp_path / "frame.jpg"
+    Image.fromarray(reencoded).save(src, quality=90)
+    assert not filecmp.cmp(src, dst, shallow=False)
+    assert _copy_image(src, dst) is True
+    assert dst.read_bytes() == dst_bytes_before
+
+
+def test_copy_image_rejects_a_genuinely_different_image_same_shape(tmp_path):
+    dst = tmp_path / "out" / "frame.jpg"
+    dst.parent.mkdir()
+    Image.fromarray(np.zeros((16, 16, 3), np.uint8)).save(dst, quality=95)
+    src = tmp_path / "frame.jpg"
+    Image.fromarray(np.full((16, 16, 3), 255, np.uint8)).save(src, quality=95)
+    with pytest.raises(ValueError, match="differs between tiers"):
+        _copy_image(src, dst)
+
+
+def test_copy_image_rejects_differing_shape_at_the_same_path(tmp_path):
+    dst = tmp_path / "out" / "frame.jpg"
+    dst.parent.mkdir()
+    Image.fromarray(np.zeros((16, 16, 3), np.uint8)).save(dst, quality=95)
+    src = tmp_path / "frame.jpg"
+    Image.fromarray(np.zeros((8, 8, 3), np.uint8)).save(src, quality=95)
+    with pytest.raises(ValueError, match="differs between tiers"):
+        _copy_image(src, dst)
+
+
+def test_merge_tolerates_reencoded_duplicates_across_tiers_and_reports_the_count(
+    make_tier, tmp_path
+):
+    a = make_tier("a", recording="rec1", calib_seed=0)
+    b = make_tier("b", recording="rec1", calib_seed=0)
+    coco = json.loads((a / "annotations" / "instances_train.json").read_text())
+    rel = coco["images"][0]["file_name"]
+    base = _smooth_image()
+    Image.fromarray(base).save(a / "images" / rel, quality=90)
+    reencoded = np.clip(base.astype(np.int16) + 5, 0, 255).astype(np.uint8)
+    Image.fromarray(reencoded).save(b / "images" / rel, quality=90)
+    out = tmp_path / "out"
+    manifest = merge_tiers([spec(a, "a"), spec(b, "b")], out)
+    assert manifest["duplicate_encodings"] == 1
+    assert (out / "images" / rel).read_bytes() == (a / "images" / rel).read_bytes()
