@@ -8,11 +8,25 @@ import jax.numpy as jnp
 import numpy as np
 
 from tracking.detector.mvq.geometry import project_local
+from tracking.detector.mvq.slots import (
+    N_SLOTS,
+    SLOT_FEMALE,
+    SLOT_MALE,
+    SLOT_OTHER,
+    SLOT_PROMPTED,
+)
 
-# Slot table, fixed by the P3a spec §3:
-# 0 = prompted, 1 = female, 2 = male, 3 = other.
-SLOT_PROMPTED, SLOT_FEMALE, SLOT_MALE, SLOT_OTHER = 0, 1, 2, 3
-N_SLOTS = 4
+__all__ = [
+    "N_SLOTS",
+    "SLOT_FEMALE",
+    "SLOT_MALE",
+    "SLOT_OTHER",
+    "SLOT_PROMPTED",
+    "EXIST_THRESH",
+    "typed_candidates",
+    "policy_instance",
+    "mask_containment",
+]
 
 EXIST_THRESH = 0.5
 
