@@ -239,7 +239,7 @@ One format, both trainers. No masks in the core root.
                             images, annotations, framesets
     instances_val.json
     keypoint_names.json     canonical keypoint order — the authority
-    split.json
+    split.json               (not implemented in Plan 1; nothing writes, checks, or ships it)
   images/<recording>/<camera>/Frame_<n>.jpg     real files, never symlinks
   calibrations/<group>/Cam*.yaml                DLT projectionMatrix per camera
   manifest.json             version, sources, calib_groups, recordings
