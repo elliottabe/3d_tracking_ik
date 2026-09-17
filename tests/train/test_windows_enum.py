@@ -20,7 +20,8 @@ def test_every_frameset_becomes_one_window_at_T1(ds):
 def test_negatives_are_identified(ds):
     neg = [i for i in range(len(ds)) if ds.is_negative(i)]
     assert len(neg) == 7302
-    assert all(ds.role(i) == "negative" for i in neg[:50])
+    assert all(ds.source(i) == "pseudo" for i in neg[:50])
+    assert {ds.role(i) for i in neg} == {"negative", "partner"}
 
 
 def test_window_index_round_trips(ds):
@@ -46,7 +47,7 @@ def test_camera_names_is_an_order_of_seven(ds):
 
 
 def test_weight_and_source_follow_the_frameset(ds):
-    i = next(i for i in range(len(ds)) if ds.source(i) == "pseudo")
+    i = next(i for i in range(len(ds)) if ds.source(i) == "pseudo" and not ds.is_negative(i))
     assert ds.weight(i) == pytest.approx(0.3)
     j = next(i for i in range(len(ds)) if ds.is_negative(i))
     assert ds.weight(j) == pytest.approx(1.0)

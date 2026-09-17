@@ -157,13 +157,13 @@ class WindowDataset:
             if recordings is not None and rec not in recordings:
                 continue
             self._fs[(rec, frame, fly)] = fsv
-            all_entries.append((rec, frame, fly, fsv))
+            all_entries.append((key, rec, frame, fly, fsv))
 
         self.pair_deltas = tuple(dict.fromkeys(int(d) for d in (pair_deltas or (1,))))
         self.windows, self.win_delta, self._win_fs = [], [], []
         self._win_index = collections.defaultdict(list)
         if self.T == 1:
-            for rec, frame, fly, fsv in all_entries:
+            for _key, rec, frame, fly, fsv in sorted(all_entries, key=lambda e: e[0]):
                 self._add_window(rec, fly, frame, 0, fsv, dedup=False)
         else:
             for rec, frame, fly in sorted(self._fs):
@@ -321,15 +321,12 @@ class WindowDataset:
         return float(self._fs_field(i, "weight", 1.0))
 
     def role(self, i):
-        """`"anchor"` | `"partner"` | `"negative"`: the pairing role of this window.
+        """`"anchor"` | `"partner"` | `"negative"`: the Delta-pairing side of this window.
 
-        Always `"negative"` for an empty window, regardless of which side of
-        its own delta-pair the frameset's own `role` field names it as -- that
-        finer distinction is `_negative_pairs`' bookkeeping, not this window's
-        public role.
+        A negative window can be either side of its own pair (`_negative_pairs`)
+        -- `"negative"` and `"partner"` both occur among negatives -- so this is
+        read straight from the frameset, never inferred from `is_negative`.
         """
-        if self.is_negative(i):
-            return "negative"
         return str(self._fs_field(i, "role", "anchor"))
 
     def is_negative(self, i):
