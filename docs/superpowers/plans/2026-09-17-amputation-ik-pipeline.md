@@ -4,7 +4,7 @@
 
 **Goal:** Run the existing IK pipeline end to end over 103 Johnson lab amputation recordings whose 3D keypoints already exist as one whole-recording CSV each, and submit the cohort as a single SLURM array job.
 
-**Architecture:** A new `ingest3d` recording-scope stage slices `data3D.csv` into per-bout `kp3d.npz`, sitting where `fine` sits in the registry. "No rig, no 2D" becomes a declared property of a recording rather than a crash. The anatomy's existing-but-never-called `filter_anatomy(tracked_kp_names=...)` is wired up so the amputated fly gets a genuinely 44-long `kp_order`, and the seven now-unobserved T1L DOFs are frozen so they cannot masquerade as data.
+**Architecture:** A new `ingest3d` recording-scope stage slices `data3D.csv` into per-bout `kp3d.npz`, sitting where `fine` sits in the registry. "No rig, no 2D" becomes a declared property of a recording rather than a crash. The anatomy's existing-but-never-called `filter_anatomy(tracked_kp_names=...)` is wired up so the amputated fly gets a genuinely 44-long `kp_order`, and the eleven now-unobserved T1L DOFs are frozen so they cannot masquerade as data.
 
 **Tech Stack:** Python 3.11+, Hydra/OmegaConf, NumPy, pandas, MuJoCo/MJX, JAX, pytest, SLURM.
 
@@ -175,7 +175,7 @@ index_csv: "${paths.base_dir}/amputation/index.csv"
 
 ```yaml
 # The IK settings for the amputation cohort: default numerics, plus the
-# left front leg's seven DOFs frozen.
+# left front leg's eleven DOFs frozen.
 #
 # Every T1L keypoint distal to the coxa is absent from data3D.csv, so those
 # joints are unobserved. Left free they would drift under the temporal prior
@@ -845,9 +845,12 @@ def test_no_patterns_optimises_everything(anatomy):
 
 
 def test_t1l_pattern_freezes_exactly_the_left_front_leg(anatomy):
+    # ELEVEN, not the seven configs/anatomy/v1.yaml's curated joint_names lists:
+    # names_qpos comes from align_joint_dims on the COMPILED model, which carries
+    # tarsus2..tarsus5_T1_left as well. Measured on the v1 model 2026-09-17.
     mask = _qs_to_opt(anatomy, ["*_T1_left"])
     frozen = [n for n, free in zip(anatomy.names_qpos, mask) if not free]
-    assert len(frozen) == 7
+    assert len(frozen) == 11
     assert all(n.endswith("_T1_left") for n in frozen)
     # the root freejoint is never frozen by a leg pattern
     assert mask[:7].all()
@@ -1901,7 +1904,7 @@ for i in t1l:
     print(f"  {names[i]:<24} ptp={col.ptp():.3e}")
 PY
 ```
-Expected: 7 slots, every `ptp` at or near 0. **A non-zero spread means the freeze did not reach the solver — stop and fix Task 5 before going further.**
+Expected: 11 slots, every `ptp` at or near 0. **A non-zero spread means the freeze did not reach the solver — stop and fix Task 5 before going further.**
 
 - [ ] **Step 4: Read the scorecard**
 

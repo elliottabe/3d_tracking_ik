@@ -221,9 +221,13 @@ free-running config — `_load_anatomy` passes `tracked_kp_names=None` and
 a recording that declares a 3D CSV, so no existing run changes behaviour.
 
 **`configs/ik/amputation.yaml`** — `defaults: [default]` plus
-`freeze_dof_patterns: ["*_T1_left"]`, matching all seven T1L qpos slots
+`freeze_dof_patterns: ["*_T1_left"]`, matching all eleven T1L qpos slots
 (`coxa_abduct`, `coxa_twist`, `coxa`, `femur_twist`, `femur`, `tibia`,
-`tarsus`) and no others.
+`tarsus`, `tarsus2`, `tarsus3`, `tarsus4`, `tarsus5`) and no others.
+**Eleven, not the seven `configs/anatomy/v1.yaml`'s curated `joint_names`
+lists** -- `names_qpos` comes from `align_joint_dims` on the COMPILED model,
+which carries four tarsus joints that curated list omits. Measured on the
+v1 model 2026-09-17 (`nq = 93`).
 
 ### 4.2 The `ingest3d` stage
 
@@ -382,7 +386,7 @@ TDD. Small synthetic fixtures except where noted.
 - **`bout_qc(rig=None)`** — no `reproj`/`loo` keys; `posture` still
   computed; `collect_rows`/`write_scorecard` produce a scorecard with
   `median_reproj_ratio: null`.
-- **DOF freeze** — `["*_T1_left"]` masks exactly 7 slots and leaves the root
+- **DOF freeze** — `["*_T1_left"]` masks exactly 11 slots and leaves the root
   freejoint free; a pattern matching nothing announces; a pattern matching
   everything refuses.
 - **`plan.resolve`** with `ingest3d` in `stages` does not raise (§3.7) —
