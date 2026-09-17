@@ -22,7 +22,7 @@ class Work:
     skip_reason: str | None
 
 
-_NEVER_SKIP_AT_PLAN_LEVEL = frozenset({"coarse", "fine"})
+_NEVER_SKIP_AT_PLAN_LEVEL = frozenset({"coarse", "fine", "ingest3d"})
 
 
 def _bout_dir(run_root: Path, bout_id: int) -> Path:

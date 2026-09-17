@@ -26,6 +26,10 @@ def fly_sex_label(sex_json: dict, fly: int) -> str:
     """`"female"` / `"male"` / `"unknown"`, read from `sex.json`."""
     if str(sex_json.get("identity")) != "sex":
         return "unknown"
+    by_fly = sex_json.get("sex_by_fly")
+    if isinstance(by_fly, dict):
+        label = by_fly.get(str(fly))
+        return label if label in ("male", "female") else "unknown"
     male = sex_json.get("male_fly")
     if male is None:
         return "unknown"

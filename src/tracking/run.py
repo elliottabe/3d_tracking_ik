@@ -142,6 +142,17 @@ def _execute(work: P.Work, cfg: DictConfig, ctx: dict[str, Any], bout_ids: list[
             write_bouts_csv(run_root / "bouts.csv", bouts)
         return
 
+    if stage == "ingest3d":
+        from tracking.io.bouts import read_bouts_csv, select
+        from tracking.pipeline.ingest_stages import ingest3d_recording
+
+        bouts = select(read_bouts_csv(run_root / "bouts.csv"), bout_ids)
+        with timed(timing_path, stage, n_items=len(bouts)):
+            ingest3d_recording(
+                run_root, spec=spec, kp_order=anatomy.kp_order, bouts=bouts
+            )
+        return
+
     if stage == "fine":
         from tracking.detector.centerdetect.detector import CenterDetector
         from tracking.detector.fine import fine_track_bouts
