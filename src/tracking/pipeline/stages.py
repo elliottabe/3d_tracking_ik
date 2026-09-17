@@ -60,7 +60,7 @@ STAGES: tuple[Stage, ...] = (
     Stage(
         "postprocess",
         "bout_fly",
-        ("stac_ik.h5", "floor.json"),
+        ("stac_ik.h5", "kp2d.npz", "floor.json"),
         ("outputs.h5", "fitted.npz", "qc.json"),
         "exists",
     ),

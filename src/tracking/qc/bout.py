@@ -58,11 +58,14 @@ def bout_qc(
     if rig is None:
         resid = np.full(fitted_world.shape[0], np.nan)
     else:
+        # Call order matches the pre-refactor version exactly: ik_reproj_report,
+        # then per_frame_reproj, then loo_report. A swap changes which exception
+        # a malformed rig surfaces first.
         report["reproj"] = ik_reproj_report(
             kp2d, conf2d, fitted_world, kp3d_raw, rig, conf_thresh=conf_thresh
         )
-        report["loo"] = loo_report(kp2d, conf2d, rig, conf_thresh=conf_thresh)
         resid = per_frame_reproj(kp2d, conf2d, fitted_world, rig, conf_thresh=conf_thresh)
+        report["loo"] = loo_report(kp2d, conf2d, rig, conf_thresh=conf_thresh)
 
     report["invariants"] = inv
     report["coverage"] = coverage_report(kp3d_raw, conf3d, kp_order, conf_thresh=conf_thresh)
