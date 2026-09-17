@@ -81,6 +81,7 @@ def merge_tiers(tiers, out_root, *, splits=schema.SPLITS, copy_images=True) -> d
 
     sources: dict[str, dict] = {}
     recordings: dict[str, dict] = {}
+    calib_by_source: dict[str, dict[str, str]] = {}
     counts = dict.fromkeys(ids, 0)
 
     for split in splits:
@@ -108,10 +109,23 @@ def merge_tiers(tiers, out_root, *, splits=schema.SPLITS, copy_images=True) -> d
                 next_ann += 1
             for key, fs in coco["framesets"].items():
                 rec = fs["recording"]
-                old_group = man.get("recordings", {}).get(rec, {}).get("calib_group", "A")
-                recordings.setdefault(rec, {})["calib_group"] = calib_map[
-                    (tier.source_id, old_group)
-                ]
+                rec_manifest = man.get("recordings", {}).get(rec)
+                if rec_manifest is None or "calib_group" not in rec_manifest:
+                    raise ValueError(
+                        f"tier {tier.source_id!r} recording {rec!r} has no calib_group "
+                        f"in its manifest"
+                    )
+                new_group = calib_map[(tier.source_id, rec_manifest["calib_group"])]
+                seen = calib_by_source.setdefault(rec, {})
+                for other_source, other_group in seen.items():
+                    if other_group != new_group:
+                        raise ValueError(
+                            f"recording {rec!r} calib_group conflict: "
+                            f"{other_source!r}={other_group!r} vs "
+                            f"{tier.source_id!r}={new_group!r}"
+                        )
+                seen[tier.source_id] = new_group
+                recordings.setdefault(rec, {})["calib_group"] = new_group
                 framesets[f"{tier.source_id}/{key}"] = {
                     **fs,
                     "frames": [img_map[i] for i in fs["frames"]],

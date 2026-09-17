@@ -81,6 +81,23 @@ def test_keypoint_name_disagreement_is_rejected(make_tier, tmp_path):
         merge_tiers([spec(a, "a"), spec(b, "b")], tmp_path / "out")
 
 
+def test_cross_tier_calib_conflict_is_rejected(make_tier, tmp_path):
+    a = make_tier("a", recording="rec1", calib_seed=0)
+    b = make_tier("b", recording="rec1", calib_seed=1)
+    with pytest.raises(ValueError, match="calib_group conflict"):
+        merge_tiers([spec(a, "a"), spec(b, "b")], tmp_path / "out", copy_images=False)
+
+
+def test_missing_calib_group_in_manifest_is_rejected(make_tier, tmp_path):
+    a = make_tier("a", recording="rec1")
+    man_path = a / "manifest.json"
+    man = json.loads(man_path.read_text())
+    del man["recordings"]["rec1"]["calib_group"]
+    man_path.write_text(json.dumps(man))
+    with pytest.raises(ValueError, match="no calib_group"):
+        merge_tiers([spec(a, "a")], tmp_path / "out")
+
+
 def test_merged_root_validates_clean(make_tier, tmp_path):
     from tracking.curate.validate import validate_root
 
