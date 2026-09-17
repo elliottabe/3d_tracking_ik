@@ -32,7 +32,12 @@ def bout_qc(
     sex: str,
     conf_thresh: float = 0.3,
 ) -> dict:
-    """Run every check for one bout-fly and merge the reports."""
+    """Run every check for one bout-fly and merge the reports.
+
+    `rig=None` marks a recording with no calibrated cameras: the reprojection
+    and leave-one-out blocks are OMITTED, not nulled -- a null would claim the
+    check ran and found nothing.
+    """
     kp3d_raw = np.asarray(kp3d_raw, np.float64)
     fitted_world = np.asarray(fitted_world, np.float64)
     if not np.isfinite(fitted_world).any():
@@ -49,16 +54,23 @@ def bout_qc(
             f"landmark -- every jitter and confidence metric will rate it as good"
         )
 
-    rep = ik_reproj_report(kp2d, conf2d, fitted_world, kp3d_raw, rig, conf_thresh=conf_thresh)
-    resid = per_frame_reproj(kp2d, conf2d, fitted_world, rig, conf_thresh=conf_thresh)
-    return {
-        "reproj": rep,
-        "loo": loo_report(kp2d, conf2d, rig, conf_thresh=conf_thresh),
-        "invariants": inv,
-        "coverage": coverage_report(kp3d_raw, conf3d, kp_order, conf_thresh=conf_thresh),
-        "posture": posture_report(fitted_world, kp_order, floor, residual_px=resid, sex=sex),
-        "structural_ok": True,
-    }
+    report: dict = {}
+    if rig is None:
+        resid = np.full(fitted_world.shape[0], np.nan)
+    else:
+        report["reproj"] = ik_reproj_report(
+            kp2d, conf2d, fitted_world, kp3d_raw, rig, conf_thresh=conf_thresh
+        )
+        report["loo"] = loo_report(kp2d, conf2d, rig, conf_thresh=conf_thresh)
+        resid = per_frame_reproj(kp2d, conf2d, fitted_world, rig, conf_thresh=conf_thresh)
+
+    report["invariants"] = inv
+    report["coverage"] = coverage_report(kp3d_raw, conf3d, kp_order, conf_thresh=conf_thresh)
+    report["posture"] = posture_report(
+        fitted_world, kp_order, floor, residual_px=resid, sex=sex
+    )
+    report["structural_ok"] = True
+    return report
 
 
 def write_qc_json(path, report: dict) -> None:

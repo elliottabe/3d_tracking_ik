@@ -325,7 +325,10 @@ def postprocess_bout_fly(
     stac = read_stac_h5(stac_path)
     kp3d_filt, conf3d_filt = load_bout_kp3d(bout_dir / "kp3d_filt.npz", kp_order=kp_order)
     kp3d_raw, conf3d_raw = load_bout_kp3d(bout_dir / "kp3d.npz", kp_order=kp_order)
-    kp2d, conf2d = load_bout_kp2d(bout_dir / "kp2d.npz", kp_order=kp_order, cameras=cameras)
+    if rig is None:
+        kp2d = conf2d = None
+    else:
+        kp2d, conf2d = load_bout_kp2d(bout_dir / "kp2d.npz", kp_order=kp_order, cameras=cameras)
 
     out = build_fly_outputs(
         anatomy,

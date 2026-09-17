@@ -390,7 +390,7 @@ def _context(cfg: DictConfig, works: list[P.Work]) -> dict[str, Any]:
     ctx: dict[str, Any] = {"spec": spec}
     if any(w.skip_reason is None for w in works):
         ctx["anatomy"] = _load_anatomy(cfg)
-        ctx["rig"] = _rig(spec)
+        ctx["rig"] = _rig(spec) if spec.has_rig else None
     return ctx
 
 
