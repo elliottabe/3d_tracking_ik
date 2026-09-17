@@ -26,15 +26,18 @@ import collections
 from pathlib import Path
 
 import numpy as np
+from PIL import Image
 
 from tracking.curate import schema
+from tracking.curate.masks.store import MaskStore
 from tracking.detector.mvq.slots import SEX_FEMALE, SEX_MALE, SEX_PRESENT_UNKNOWN, SEX_UNKNOWN
 from tracking.geometry.rig import CameraRig
+from tracking.train.data.transforms import crop_origin
 
 CROP = 448
 WINDOW_KEYS = (
     "crops", "cam_valid", "M", "t_local", "center3D", "kp3d_local", "has3d",
-    "kp2d", "vis2d", "fly_valid", "px_scale", "is_female", "prompt_mask", "crop_origin",
+    "kp2d", "vis2d", "fly_valid", "px_scale", "is_female", "donor_mask", "crop_origin",
     "fly_sex", "unlabelled_sex", "sample_weight", "is_negative",
 )  # fmt: skip
 
@@ -442,3 +445,169 @@ class WindowDataset:
             if has.any():
                 out[fi] = pts[has].mean(0)
         return out
+
+    def _frame_labels(self, fsv, rig):
+        """Per camera (BY NAME) full-frame (K,3) labels and (image info, annotation)."""
+        cam_row = {n: idx for idx, n in enumerate(rig.cameras)}
+        K = len(self.kp_order)
+        kp = np.zeros((rig.n_cameras, K, 3), np.float32)
+        infos = [None] * rig.n_cameras
+        for img_id, ann_id in _resolved_slots(fsv):
+            info, ann = self._img[img_id], self._ann[ann_id]
+            c = cam_row.get(info["file_name"].split("/")[1])
+            if c is None:
+                continue
+            k = np.asarray(ann["keypoints"], np.float32)
+            if k.size == K * 3:
+                kp[c] = k.reshape(-1, 3)
+            infos[c] = (info, ann)
+        return kp, infos
+
+    def _dlt(self, kp, rig):
+        """(K,3) DLT triangulation and (K,) has3d from `kp` (C,K,3) via `rig.reconstruct_batch`.
+
+        A keypoint with fewer than 2 cameras scoring `kp[..., 2] > 0` gets
+        `has3d = False` and a zero point rather than the NaN `reconstruct_batch` returns.
+        """
+        valid = kp[:, :, 2] > 0
+        xyz = rig.reconstruct_batch(kp[:, :, :2].transpose(1, 0, 2), valid.T)
+        has = ~np.isnan(xyz).any(-1)
+        return np.where(has[:, None], xyz, 0.0).astype(np.float32), has
+
+    def _decode(self, info):
+        with Image.open(Path(self.root) / "images" / info["file_name"]) as im:
+            return np.asarray(im.convert("RGB"), np.uint8)
+
+    def _build(self, i):
+        """One sample: crops, geometry and labels for window i (Task 5 -- see module docstring)."""
+        rec, host, f0 = self.windows[i]
+        negative = host < 0
+        rig = self._rig(self.calib_group(i))
+        cam_names = list(rig.cameras)
+        C, T, K, F = rig.n_cameras, self.T, len(self.kp_order), self.max_flies
+        M, t = rig.matrices_f64[:, :2, :3], rig.matrices_f64[:, :2, 3]
+
+        frames = self._frames(i)
+        _, flies = self._window_flies(i)
+        kp_full = np.zeros((F, T, C, K, 3), np.float32)
+        X3 = np.zeros((F, T, K, 3), np.float32)
+        has3d = np.zeros((F, T, K), bool)
+        infos = {}
+        if negative:
+            for ti, f in enumerate(frames):
+                _, inf = self._frame_labels(self._fs[(rec, f, host)], rig)
+                for c in range(C):
+                    if inf[c] is not None:
+                        infos.setdefault((ti, c), inf[c])
+        for fi, fly in enumerate(flies):
+            for ti, f in enumerate(frames):
+                fsv = self._fs.get((rec, f, fly))
+                if fsv is None:
+                    continue
+                kp, inf = self._frame_labels(fsv, rig)
+                kp_full[fi, ti] = kp
+                X3[fi, ti], has3d[fi, ti] = self._dlt(kp, rig)
+                for c in range(C):
+                    if inf[c] is not None:
+                        infos.setdefault((ti, c), inf[c])
+
+        cam_valid = np.zeros((T, C), bool)
+        for ti, c in infos:
+            cam_valid[ti, c] = True
+        for ti, f in enumerate(frames):
+            present = {
+                self._img[img]["file_name"].split("/")[1]
+                for img, _ in _resolved_slots(self._fs[(rec, f, host)])
+            }
+            for c, name in enumerate(cam_names):
+                if name not in present:
+                    cam_valid[ti, c] = False
+
+        if negative:
+            c3 = self._fs[(rec, f0, host)].get("center3D")
+            if c3 is None:
+                raise ValueError(
+                    f"negative frameset {rec}/Frame_{f0}: no 'center3D'. An empty window has no "
+                    f"labels to place itself with, so the exporter must store the centre it "
+                    f"sampled (spec 2026-09-05 §3.5)"
+                )
+            center = np.asarray(c3, np.float64)
+        else:
+            vis0 = has3d[0, 0]
+            pts = X3[0, 0][vis0] if vis0.any() else np.zeros((1, 3), np.float32)
+            center = 0.5 * (pts.max(0).astype(np.float64) + pts.min(0).astype(np.float64))
+        if self.train and self.jitter > 0:
+            rng = np.random.default_rng(
+                np.random.SeedSequence([self.seed, int(i), int(self.epoch)])
+            )
+            center = center + rng.uniform(-self.jitter, self.jitter, size=3)
+        if not self.train and self.center_shift > 0:
+            rng = np.random.default_rng(np.random.SeedSequence([self.seed, int(i), 99]))
+            ang = rng.uniform(0, 2 * np.pi)
+            center = center + self.center_shift * np.array([np.cos(ang), np.sin(ang), 0.0])
+        center = center.astype(np.float32)
+
+        origin = np.zeros((C, 2), np.int32)
+        for c in range(C):
+            info = next((infos[(ti, c)][0] for ti in range(T) if (ti, c) in infos), None)
+            w, h = (info["width"], info["height"]) if info else (1936, 448)
+            u, v = M[c] @ center + t[c]
+            origin[c] = crop_origin([u, v, 0, 0], w, h, CROP)
+
+        crops = np.zeros((T, C, CROP, CROP, 3), np.uint8)
+        donor_mask = np.zeros((T, C, CROP, CROP), bool)
+        mask_store = MaskStore(self.masks_root) if self.masks_root is not None else None
+        for (ti, c), (info, _ann) in infos.items():
+            if not cam_valid[ti, c]:
+                continue
+            img = self._decode(info)
+            x0, y0 = origin[c]
+            crops[ti, c] = img[y0 : y0 + CROP, x0 : x0 + CROP]
+            if negative or mask_store is None:
+                continue
+            for img_id, ann_id in _resolved_slots(self._fs[(rec, frames[ti], host)]):
+                if self._img[img_id]["file_name"] == info["file_name"]:
+                    m = mask_store.load(rec, cam_names[c], frames[ti], ann_id)
+                    if m is not None:
+                        donor_mask[ti, c] = m[y0 : y0 + CROP, x0 : x0 + CROP].astype(bool)
+
+        t_local = np.zeros((T, C, 2), np.float32)
+        for ti in range(T):
+            t_local[ti] = (M @ center + t - origin).astype(np.float32)
+        kp2d = kp_full[..., :2] - origin[None, None, :, None, :]
+        inside = ((kp2d >= 0) & (kp2d <= CROP - 1)).all(-1)
+        vis2d = (kp_full[..., 2] > 0) & inside & cam_valid[None, :, :, None]
+        fly_valid = np.array([fi < len(flies) and vis2d[fi].any() for fi in range(F)])
+        if not negative:
+            fly_valid[0] = True
+        px_scale = float(np.mean(np.sqrt((M**2).sum((1, 2)) / 2.0)))
+        return {
+            "crops": crops,
+            "cam_valid": cam_valid,
+            "M": M.astype(np.float32),
+            "t_local": t_local,
+            "center3D": center,
+            "kp3d_local": (X3 - center).astype(np.float32) * has3d[..., None],
+            "has3d": has3d,
+            "kp2d": kp2d.astype(np.float32),
+            "vis2d": vis2d,
+            "fly_valid": fly_valid,
+            "px_scale": np.float32(px_scale),
+            "is_female": np.bool_(self.is_female(i)),
+            "donor_mask": donor_mask,
+            "crop_origin": origin,
+            "fly_sex": np.array(
+                [
+                    self.fly_sex_code(rec, flies[fi], f0) if fi < len(flies) else SEX_UNKNOWN
+                    for fi in range(F)
+                ],
+                np.int8,
+            ),
+            "unlabelled_sex": np.int8(self.unlabelled_sex(i)),
+            "sample_weight": np.float32(self.weight(i)),
+            "is_negative": np.bool_(negative),
+        }
+
+    def __getitem__(self, i):
+        """One training sample (`WINDOW_KEYS`) for window i; see `_build`."""
+        return self._build(i)
