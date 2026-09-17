@@ -54,6 +54,36 @@ def _merge_calibrations(tiers, out_root):
     return mapping
 
 
+def _preflight_calib_groups(tiers, calib_map):
+    """Cross-tier calib_group agreement per recording, from manifests alone; no images touched.
+
+    >>> _preflight_calib_groups([], {})
+    {}
+    """
+    resolved: dict[tuple[str, str], str] = {}
+    seen: dict[str, dict[str, str]] = {}
+    for tier in tiers:
+        man = schema.load_manifest(tier.path)
+        for rec, rec_manifest in man.get("recordings", {}).items():
+            group = rec_manifest.get("calib_group") if isinstance(rec_manifest, dict) else None
+            if group is None:
+                raise ValueError(
+                    f"tier {tier.source_id!r} recording {rec!r} has no calib_group in its manifest"
+                )
+            new_group = calib_map[(tier.source_id, group)]
+            by_rec = seen.setdefault(rec, {})
+            for other_source, other_group in by_rec.items():
+                if other_group != new_group:
+                    raise ValueError(
+                        f"recording {rec!r} calib_group conflict: "
+                        f"{other_source!r}={other_group!r} vs "
+                        f"{tier.source_id!r}={new_group!r}"
+                    )
+            by_rec[tier.source_id] = new_group
+            resolved[(tier.source_id, rec)] = new_group
+    return resolved
+
+
 def merge_tiers(tiers, out_root, *, splits=schema.SPLITS, copy_images=True) -> dict:
     """Merge `tiers` into `out_root`; return the written manifest.
 
@@ -78,10 +108,10 @@ def merge_tiers(tiers, out_root, *, splits=schema.SPLITS, copy_images=True) -> d
     out_root = Path(out_root)
     (out_root / "annotations").mkdir(parents=True, exist_ok=True)
     calib_map = _merge_calibrations(tiers, out_root)
+    resolved_calib = _preflight_calib_groups(tiers, calib_map)
 
     sources: dict[str, dict] = {}
     recordings: dict[str, dict] = {}
-    calib_by_source: dict[str, dict[str, str]] = {}
     counts = dict.fromkeys(ids, 0)
 
     for split in splits:
@@ -92,7 +122,6 @@ def merge_tiers(tiers, out_root, *, splits=schema.SPLITS, copy_images=True) -> d
                 coco = schema.load_instances(tier.path, split)
             except FileNotFoundError:
                 continue
-            man = schema.load_manifest(tier.path)
             img_map, ann_map = {}, {}
             for im in coco["images"]:
                 img_map[im["id"]] = next_img
@@ -109,22 +138,13 @@ def merge_tiers(tiers, out_root, *, splits=schema.SPLITS, copy_images=True) -> d
                 next_ann += 1
             for key, fs in coco["framesets"].items():
                 rec = fs["recording"]
-                rec_manifest = man.get("recordings", {}).get(rec)
-                if rec_manifest is None or "calib_group" not in rec_manifest:
+                try:
+                    new_group = resolved_calib[(tier.source_id, rec)]
+                except KeyError:
                     raise ValueError(
-                        f"tier {tier.source_id!r} recording {rec!r} has no calib_group "
-                        f"in its manifest"
-                    )
-                new_group = calib_map[(tier.source_id, rec_manifest["calib_group"])]
-                seen = calib_by_source.setdefault(rec, {})
-                for other_source, other_group in seen.items():
-                    if other_group != new_group:
-                        raise ValueError(
-                            f"recording {rec!r} calib_group conflict: "
-                            f"{other_source!r}={other_group!r} vs "
-                            f"{tier.source_id!r}={new_group!r}"
-                        )
-                seen[tier.source_id] = new_group
+                        f"tier {tier.source_id!r} recording {rec!r} is not in its "
+                        f"manifest's recordings"
+                    ) from None
                 recordings.setdefault(rec, {})["calib_group"] = new_group
                 framesets[f"{tier.source_id}/{key}"] = {
                     **fs,

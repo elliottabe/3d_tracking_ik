@@ -88,6 +88,15 @@ def test_cross_tier_calib_conflict_is_rejected(make_tier, tmp_path):
         merge_tiers([spec(a, "a"), spec(b, "b")], tmp_path / "out", copy_images=False)
 
 
+def test_calib_conflict_is_caught_before_any_image_is_copied(make_tier, tmp_path):
+    a = make_tier("a", recording="rec1", calib_seed=0)
+    b = make_tier("b", recording="rec1", calib_seed=1)
+    out = tmp_path / "out"
+    with pytest.raises(ValueError, match="calib_group conflict"):
+        merge_tiers([spec(a, "a"), spec(b, "b")], out, copy_images=True)
+    assert not (out / "images").exists() or not any((out / "images").iterdir())
+
+
 def test_missing_calib_group_in_manifest_is_rejected(make_tier, tmp_path):
     a = make_tier("a", recording="rec1")
     man_path = a / "manifest.json"
