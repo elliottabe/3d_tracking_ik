@@ -33,6 +33,7 @@ from tracking.curate.masks.store import MaskStore
 from tracking.detector.mvq.geometry import affine_rows
 from tracking.detector.mvq.slots import SEX_FEMALE, SEX_MALE, SEX_PRESENT_UNKNOWN, SEX_UNKNOWN
 from tracking.geometry.rig import CameraRig
+from tracking.train.data.copypaste import body_plane_axes, composite, sample_offset
 from tracking.train.data.transforms import crop_origin
 
 CROP = 448
@@ -193,6 +194,14 @@ class WindowDataset:
                 f"the annotation/manifest chain on {n} window(s) of split {self.split!r}",
                 flush=True,
             )
+        self._donors = collections.defaultdict(list)
+        if self.copy_paste is not None:
+            for i in range(len(self.windows)):
+                if self.is_negative(i):
+                    continue
+                sex = _SEX_CODE.get(self._win_sex[i], SEX_UNKNOWN)
+                self._donors[(self.calib_group(i), sex, self.delta(i))].append(i)
+
         self._rigs = {}
         self._affine_mt = {}
 
@@ -606,6 +615,39 @@ class WindowDataset:
             "sample_weight": np.float32(self.weight(i)),
             "is_negative": np.bool_(negative),
         }
+
+    def paste_window(self, i, rng):
+        """Copy-paste a donor fly into every frame of window i, or `None`.
+
+        `None` for a negative window (no host to paste onto), for a host
+        with no donor pool at its own `(calib_group, sex, delta)` or the
+        opposite one, or when `composite` rejects every donor drawn within
+        `copy_paste.max_tries` (see `tracking.train.data.copypaste.composite`
+        for the rejection conditions). The donor pool is keyed by spacing
+        because a donor is composited with its own per-frame motion, so it
+        must span the same `delta` as the host.
+        """
+        if self.copy_paste is None or self.is_negative(i):
+            return None
+        p = self.copy_paste
+        grp, d_i = self.calib_group(i), self.delta(i)
+        host_sex = _SEX_CODE.get(self._win_sex[i], SEX_UNKNOWN)
+        tgt = self._build(i)
+        axes = body_plane_axes(tgt["kp3d_local"][0, 0], tgt["has3d"][0, 0])
+        for _ in range(p.max_tries):
+            opposite = host_sex in (SEX_FEMALE, SEX_MALE) and rng.uniform() < p.opposite_sex_p
+            want = (1 - host_sex) if opposite else host_sex
+            other = (1 - want) if want in (SEX_FEMALE, SEX_MALE) else host_sex
+            pool = [j for j in self._donors.get((grp, want, d_i), []) if j != i]
+            pool = pool or [j for j in self._donors.get((grp, other, d_i), []) if j != i]
+            if not pool:
+                return None
+            j = int(pool[rng.integers(len(pool))])
+            D = sample_offset(rng, axes, p)
+            out = composite(tgt, self._build(j), D, p)
+            if out is not None:
+                return out
+        return None
 
     def __getitem__(self, i):
         """One training sample (`WINDOW_KEYS`) for window i; see `_build`."""
