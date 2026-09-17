@@ -67,6 +67,51 @@ def test_recording_without_a_bout_table_is_skipped_by_name(tmp_path):
     assert manifest.read_text().split() == ["2026_07_06_16_55_07"]
 
 
+def test_requeue_flag_comes_from_the_slurm_profile(tmp_path):
+    root = _data_root(tmp_path, ["2026_07_06_16_55_07"])
+    ckpt = _run(
+        "--dry-run",
+        "--run-name",
+        "ik_v1",
+        "--data-root",
+        str(root),
+        "--manifest-dir",
+        str(tmp_path),
+        "--slurm",
+        "ckpt_all",
+    )
+    assert ckpt.returncode == 0, ckpt.stderr
+    assert "--requeue" in ckpt.stdout
+
+    l40s = _run(
+        "--dry-run",
+        "--run-name",
+        "ik_v1",
+        "--data-root",
+        str(root),
+        "--manifest-dir",
+        str(tmp_path),
+        "--slurm",
+        "gpu_l40s",
+    )
+    assert l40s.returncode == 0, l40s.stderr
+    assert "--requeue" not in l40s.stdout
+
+
+def test_missing_data_root_is_named_distinctly(tmp_path):
+    out = _run(
+        "--dry-run",
+        "--run-name",
+        "ik_v1",
+        "--data-root",
+        str(tmp_path / "nope"),
+        "--manifest-dir",
+        str(tmp_path),
+    )
+    assert out.returncode != 0
+    assert "--data-root does not exist" in out.stderr
+
+
 def test_run_name_is_required(tmp_path):
     root = _data_root(tmp_path, ["2026_07_06_16_55_07"])
     out = _run("--dry-run", "--data-root", str(root))

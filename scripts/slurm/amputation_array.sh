@@ -46,6 +46,13 @@ done
     exit 2
 }
 
+# A missing data root is a different operator error from an empty one, and the
+# generic "no usable recording" refusal below would hide which it was.
+[ -d "$DATA_ROOT" ] || {
+    echo "refusing: --data-root does not exist: $DATA_ROOT" >&2
+    exit 2
+}
+
 # -- Discovery. A recording is usable only if it has BOTH the 3D table and a
 #    bout table with at least one data row. A skip is always named on stderr:
 #    "N tasks submitted" vs "103 directories exist" is exactly the discrepancy
@@ -83,6 +90,11 @@ fi
 
 # -- Freeze the list. Tasks index THIS file, never a fresh glob.
 mkdir -p "$MANIFEST_DIR"
+# ABSOLUTE, always: the job body does `cd "$REPO"` before reading the manifest,
+# so a relative --manifest-dir would resolve against $REPO on the compute node
+# and silently find nothing -- defeating the one guarantee this script exists
+# to provide.
+MANIFEST_DIR="$(cd "$MANIFEST_DIR" && pwd)"
 MANIFEST="$MANIFEST_DIR/amputation_$(date +%Y%m%d-%H%M%S).manifest"
 printf '%s\n' "$USABLE" > "$MANIFEST"
 
@@ -103,6 +115,11 @@ RESOURCE_FLAGS=(
 [ -n "$(_y gres)" ]       && RESOURCE_FLAGS+=("--gres=$(_y gres)")
 [ -n "$(_y constraint)" ] && RESOURCE_FLAGS+=("--constraint=$(_y constraint)")
 [ -n "$(_y exclude)" ]    && RESOURCE_FLAGS+=("--exclude=$(_y exclude)")
+# ckpt-all is preemptible and its profile sets `requeue: true`; without this a
+# preempted array task is simply lost. session_pipeline.sh does the same
+# (`if slurm_cfg.get("requeue")`). Compared against "true" rather than tested
+# for non-emptiness so that `requeue: false` does NOT add the flag.
+[ "$(_y requeue)" = "true" ] && RESOURCE_FLAGS+=("--requeue")
 
 # -- VERIFIED FACT 1, copied from session_pipeline.sh: `module load cuda` alone
 #    measurably leaves JAX on cpu on this cluster; the env's own bundled wheels
