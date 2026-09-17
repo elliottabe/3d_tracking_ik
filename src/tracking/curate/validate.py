@@ -226,10 +226,10 @@ def _check_split(root, split, kp_order, sources, recordings, out):
 def _check_mask_ann_ids(root, masks_root, split, out):
     """Warn when a frameset's ann_ids have no row in the mask file of their frame.
 
-    Reads at most the first `MASK_SAMPLE` framesets of the split: a real root
-    carries ~145k sidecar files and opening them all would dominate the run.
-    A frame with no mask file at all is skipped, not reported -- a tier
-    without masks legitimately has none.
+    Reads an evenly spaced sample of at most `MASK_SAMPLE` framesets of the
+    split: a real root carries ~145k sidecar files and opening them all would
+    dominate the run. A frame with no mask file at all is skipped, not
+    reported -- a tier without masks legitimately has none.
     """
     store = MaskStore(masks_root)
     try:
@@ -244,7 +244,9 @@ def _check_mask_ann_ids(root, masks_root, split, out):
         return
     checked = unresolved = 0
     first = None
-    for key, fs in list(framesets.items())[:MASK_SAMPLE]:
+    keys = list(framesets)
+    for key in keys[:: max(1, len(keys) // MASK_SAMPLE)][:MASK_SAMPLE]:
+        fs = framesets[key]
         if not isinstance(fs, dict):
             continue
         for img_id, ann_id in zip(fs.get("frames", []), fs.get("ann_ids", []), strict=False):
