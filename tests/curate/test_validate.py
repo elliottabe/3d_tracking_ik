@@ -265,6 +265,15 @@ def test_frameset_without_any_calib_group_is_an_error(make_tier):
     assert "frameset_calib_unresolvable" in codes(validate.validate_root(root), "error")
 
 
+def test_frameset_relying_on_recordings_calib_groups_plural_is_still_an_error(make_tier):
+    root = make_tier("t")
+    man = json.loads((root / "manifest.json").read_text())
+    del man["recordings"]["rec1"]["calib_group"]
+    man["recordings"]["rec1"]["calib_groups"] = ["A", "B"]
+    (root / "manifest.json").write_text(json.dumps(man))
+    assert "frameset_calib_unresolvable" in codes(validate.validate_root(root), "error")
+
+
 def test_malformed_recording_value_does_not_crash(make_tier):
     root = make_tier("t")
     man = json.loads((root / "manifest.json").read_text())

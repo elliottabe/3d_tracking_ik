@@ -180,7 +180,7 @@ def _check_split(root, split, kp_order, sources, recordings, out):
         else:
             rec_entry = recordings.get(fs.get("recording"))
             rec_entry = rec_entry if isinstance(rec_entry, dict) else {}
-            if rec_entry.get("calib_group") is None and not rec_entry.get("calib_groups"):
+            if rec_entry.get("calib_group") is None:
                 out.append(
                     _err(
                         "frameset_calib_unresolvable",
