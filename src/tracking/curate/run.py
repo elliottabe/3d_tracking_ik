@@ -35,7 +35,7 @@ def _tiers(cfg) -> list[TierSpec]:
 def _run_stage(name, cfg) -> int:
     c = cfg.curate
     if name == "merge":
-        manifest = merge_tiers(_tiers(cfg), c.out_root)
+        manifest = merge_tiers(_tiers(cfg), c.out_root, workers=c.workers)
         print(f"[curate] merged {len(manifest['sources'])} source(s) into {c.out_root}")
     elif name == "import_masks":
         if not c.sam_dir:

@@ -1,6 +1,7 @@
 # @package curate
 out_root: ${paths.train_data_root}
 masks_root: ${paths.masks_root}
+workers: 64
 
 # Input tiers, merged in this order. `path` is a root in the documented format.
 tiers:

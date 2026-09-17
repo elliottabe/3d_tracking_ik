@@ -1,4 +1,5 @@
 import json
+import shutil
 
 import numpy as np
 import pytest
@@ -228,3 +229,70 @@ def test_masks_false_skips_the_whole_step(make_tier, tmp_path):
     manifest = merge_tiers([spec(a, "a")], out, copy_images=False, masks=False)
     assert "masks" not in manifest
     assert not sidecar_path(out).exists()
+
+
+def test_workers_one_still_merges_correctly(make_tier, tmp_path):
+    a = make_tier("a", recording="rec1")
+    b = make_tier("b", recording="rec2")
+    out = tmp_path / "out"
+    merge_tiers([spec(a, "a"), spec(b, "b")], out, workers=1)
+    coco = schema.load_instances(out, "train")
+    ids = [i["id"] for i in coco["images"]]
+    assert len(ids) == len(set(ids))
+    for im in coco["images"]:
+        assert (out / "images" / im["file_name"]).exists()
+
+
+def test_conflicting_image_bytes_are_rejected_on_a_worker_thread(make_tier, tmp_path):
+    a = make_tier("a", recording="rec1")
+    b = make_tier("b", recording="rec1", calib_seed=0)
+    coco = json.loads((b / "annotations" / "instances_train.json").read_text())
+    (b / "images" / coco["images"][0]["file_name"]).write_bytes(b"different")
+    with pytest.raises(ValueError, match="differs between tiers"):
+        merge_tiers([spec(a, "a"), spec(b, "b")], tmp_path / "out", workers=16)
+
+
+def test_no_temp_files_survive_a_successful_merge(make_tier, tmp_path):
+    a = make_tier("a", recording="rec1")
+    b = make_tier("b", recording="rec2")
+    out = tmp_path / "out"
+    merge_tiers([spec(a, "a"), spec(b, "b")], out, workers=16)
+    assert list((out / "images").rglob("*.tmp")) == []
+
+
+def test_interrupted_copy_leaves_no_partial_destination(make_tier, tmp_path, monkeypatch):
+    def _boom(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    a = make_tier("a", recording="rec1", n_frames=1)
+    out = tmp_path / "out"
+    monkeypatch.setattr(shutil, "copyfileobj", _boom)
+    with pytest.raises(OSError):
+        merge_tiers([spec(a, "a")], out, workers=1)
+    assert list((out / "images").rglob("*.jpg")) == []
+    assert list((out / "images").rglob("*.tmp")) == []
+
+
+def test_mask_collisions_across_multiple_destinations_stay_correct_under_the_pool(
+    make_tier, tmp_path
+):
+    a = make_tier("a", recording="rec1", n_frames=1, calib_seed=0)
+    b = make_tier("b", recording="rec1", n_frames=1, calib_seed=1)
+    mask_a1, mask_b1 = np.zeros((2, 2), bool), np.ones((2, 2), bool)
+    mask_a2, mask_b2 = np.ones((2, 2), bool), np.zeros((2, 2), bool)
+    write_mask(a, "rec1", "Cam01", 100, [1], [mask_a1])
+    write_mask(b, "rec1", "Cam01", 100, [1], [mask_b1])
+    write_mask(a, "rec1", "Cam02", 100, [2], [mask_a2])
+    write_mask(b, "rec1", "Cam02", 100, [2], [mask_b2])
+    out = tmp_path / "out"
+    manifest = merge_tiers([spec(a, "a"), spec(b, "b")], out, copy_images=False, workers=8)
+    coco = schema.load_instances(out, "train")
+    a_fs = next(fs for fs in coco["framesets"].values() if fs["source_id"] == "a")
+    b_fs = next(fs for fs in coco["framesets"].values() if fs["source_id"] == "b")
+    store = MaskStore(sidecar_path(out))
+    assert np.array_equal(store.load("rec1", "Cam01", 100, a_fs["ann_ids"][0]), mask_a1)
+    assert np.array_equal(store.load("rec1", "Cam01", 100, b_fs["ann_ids"][0]), mask_b1)
+    assert np.array_equal(store.load("rec1", "Cam02", 100, a_fs["ann_ids"][1]), mask_a2)
+    assert np.array_equal(store.load("rec1", "Cam02", 100, b_fs["ann_ids"][1]), mask_b2)
+    assert manifest["masks"]["collisions_merged"] == 2
+    assert manifest["masks"]["files_written"] == 2
