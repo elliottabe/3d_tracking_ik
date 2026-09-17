@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from tracking.detector.mvq.slots import SEX_UNKNOWN
+from tracking.geometry.rig import CameraRig
 from tracking.train.data.windows import CROP, WINDOW_KEYS, WindowDataset
 
 ROOT = "/gscratch/portia/eabe/data/Johnson_lab/red_data/unified_v2"
@@ -87,3 +88,15 @@ def test_without_masks_root_donor_mask_is_empty():
 def test_sample_weight_matches_the_window_weight(ds):
     i = next(i for i in range(len(ds)) if ds.source(i) == "pseudo")
     assert float(ds[i]["sample_weight"]) == pytest.approx(ds.weight(i))
+
+
+def test_non_affine_calibration_raises(ds):
+    rig = ds._rig(ds.calib_group(0))
+    projective = rig.matrices_f64.copy()
+    projective[:, 2, :] = [0.001, 0.0, 0.0, 1.0]
+    bad_rig = CameraRig(rig.cameras, projective)
+    probe = object.__new__(WindowDataset)
+    probe._rigs = {"bad": bad_rig}
+    probe._affine_mt = {}
+    with pytest.raises(ValueError, match="affine"):
+        probe._affine("bad")

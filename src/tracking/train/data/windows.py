@@ -2,7 +2,7 @@
 
 A window is (recording, host fly, start frame f0, spacing delta): T frames of
 the host spaced `delta` apart, all cameras, to be cropped around one
-window-level 3D center by `_build` (Task 5, not implemented here). Camera
+window-level 3D center by `_build`. Camera
 order and keypoint order are resolved BY NAME (`tracking.io.names.Order`),
 never by position. Sex is resolved PER WINDOW, annotation-first: a
 (recording, fly) pair can carry framesets from different annotation subsets
@@ -30,6 +30,7 @@ from PIL import Image
 
 from tracking.curate import schema
 from tracking.curate.masks.store import MaskStore
+from tracking.detector.mvq.geometry import affine_rows
 from tracking.detector.mvq.slots import SEX_FEMALE, SEX_MALE, SEX_PRESENT_UNKNOWN, SEX_UNKNOWN
 from tracking.geometry.rig import CameraRig
 from tracking.train.data.transforms import crop_origin
@@ -193,6 +194,7 @@ class WindowDataset:
                 flush=True,
             )
         self._rigs = {}
+        self._affine_mt = {}
 
     def _add_window(self, rec, fly, f0, d, fsv, *, dedup):
         """Append window (rec, fly, f0) at spacing d, owned by `fsv`.
@@ -404,23 +406,20 @@ class WindowDataset:
             )
         return self._rigs[group]
 
+    def _affine(self, group):
+        """(C,2,3) M, (C,2) t (float64) of calib group `group`; raises if it is not affine."""
+        if group not in self._affine_mt:
+            M, t = affine_rows(self._rig(group).matrices_f32)
+            self._affine_mt[group] = (np.asarray(M, np.float64), np.asarray(t, np.float64))
+        return self._affine_mt[group]
+
     def camera_names(self, i):
         """The window's camera-axis names, in the SAME order as a future `crops`/`kp2d`/`M`."""
         return self._rig(self.calib_group(i)).cameras
 
     def _full_labels(self, fsv, rig):
         """Per camera (BY NAME) full-frame (K, 3) labels for one frameset's resolved slots."""
-        cam_row = {n: idx for idx, n in enumerate(rig.cameras)}
-        kp = np.zeros((rig.n_cameras, len(self.kp_order), 3), np.float32)
-        for img_id, ann_id in _resolved_slots(fsv):
-            info, ann = self._img[img_id], self._ann[ann_id]
-            c = cam_row.get(info["file_name"].split("/")[1])
-            if c is None:
-                continue
-            k = np.asarray(ann["keypoints"], np.float32)
-            if k.size == len(self.kp_order) * 3:
-                kp[c] = k.reshape(-1, 3)
-        return kp
+        return self._frame_labels(fsv, rig)[0]
 
     def fly_centroids(self, i):
         """(n_labelled_flies, 3) world centroid of each fly's DLT-able labels at frame 0.
@@ -485,7 +484,7 @@ class WindowDataset:
         rig = self._rig(self.calib_group(i))
         cam_names = list(rig.cameras)
         C, T, K, F = rig.n_cameras, self.T, len(self.kp_order), self.max_flies
-        M, t = rig.matrices_f64[:, :2, :3], rig.matrices_f64[:, :2, 3]
+        M, t = self._affine(self.calib_group(i))
 
         frames = self._frames(i)
         _, flies = self._window_flies(i)
