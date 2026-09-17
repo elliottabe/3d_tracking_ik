@@ -67,6 +67,13 @@ def test_ingest_is_resumable_and_skips_written_bouts(tmp_path):
     assert forced["n_written"] == 1
 
 
+def test_sex_column_is_found_by_header_not_first_matching_cell(tmp_path):
+    """A flyID of "F" must not be mistaken for the sex column."""
+    index = tmp_path / "index.csv"
+    index.write_text("flyID,sex,,amp\nF,m,recY,T1L\n")
+    assert sex_json_for(index, "recY")["sex_by_fly"] == {"0": "male"}
+
+
 def test_sex_json_read_from_the_cohort_index(tmp_path):
     index = tmp_path / "index.csv"
     index.write_text("flyID,sex,,amp\n1,f,rec1,T1L\n2,m,rec2,T1L\n")

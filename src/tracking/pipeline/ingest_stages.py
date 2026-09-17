@@ -24,26 +24,39 @@ _SEX_LABELS = {"f": "female", "m": "male", "female": "female", "male": "male"}
 def sex_json_for(index_csv, recording: str) -> dict[str, Any] | None:
     """This recording's `sex.json` payload from the cohort index, or None.
 
-    The index's recording column is unnamed, so it is located by value rather
-    than by header. A recording absent from the index yields None, which the
-    caller writes as no file at all -- `fly_sex_label` then reports "unknown".
+    The recording's own column is unnamed in the index header, so it is found
+    by value. The sex column IS named, so it is read by header position -- a
+    left-to-right scan for the first sex-looking cell would return a flyID of
+    "F" or "M" before ever reaching the real sex column.
+
+    A recording absent from the index yields None, which the caller writes as
+    no file at all -- `fly_sex_label` then reports "unknown".
     """
     with open(index_csv, newline="") as fh:
-        for row in csv.reader(fh):
-            cells = [c.strip() for c in row]
-            if recording not in cells:
-                continue
-            for cell in cells:
-                label = _SEX_LABELS.get(cell.lower())
-                if label:
-                    return {
-                        "identity": "sex",
-                        "sex_by_fly": {"0": label},
-                        "method": "cohort_index",
-                        "authority": "cohort_index",
-                        "source": str(index_csv),
-                    }
-            return None
+        rows = list(csv.reader(fh))
+    if not rows:
+        return None
+
+    header = [c.strip().lower() for c in rows[0]]
+    sex_col = header.index("sex") if "sex" in header else None
+
+    for row in rows[1:]:
+        cells = [c.strip() for c in row]
+        if recording not in cells:
+            continue
+        if sex_col is not None and sex_col < len(cells):
+            cells = [cells[sex_col]]
+        for cell in cells:
+            label = _SEX_LABELS.get(cell.lower())
+            if label:
+                return {
+                    "identity": "sex",
+                    "sex_by_fly": {"0": label},
+                    "method": "cohort_index",
+                    "authority": "cohort_index",
+                    "source": str(index_csv),
+                }
+        return None
     return None
 
 
