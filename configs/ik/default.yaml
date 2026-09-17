@@ -18,3 +18,8 @@ per_frame:
   gradient_tolerance: 1.0e-14
   parameter_tolerance: 1.0e-16
   batch: 512
+
+# fnmatch patterns over `anatomy.names_qpos`; matching qpos slots are held at
+# their warm-start value instead of being optimised. Empty means solve every
+# DOF, which is what every intact-fly recording wants.
+freeze_dof_patterns: []

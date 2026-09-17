@@ -1,0 +1,10 @@
+# The IK settings for the amputation cohort: default numerics, plus the
+# left front leg's eleven DOFs frozen.
+#
+# Every T1L keypoint distal to the coxa is absent from data3D.csv, so those
+# joints are unobserved. Left free they would drift under the temporal prior
+# and land in outputs.h5 looking like measurements.
+defaults:
+  - default
+
+freeze_dof_patterns: ["*_T1_left"]
