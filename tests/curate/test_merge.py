@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 
 import numpy as np
@@ -6,7 +7,7 @@ import pytest
 
 from tracking.curate import schema
 from tracking.curate.masks.store import MaskStore, sidecar_path
-from tracking.curate.merge import TierSpec, merge_tiers
+from tracking.curate.merge import TierSpec, _copy_image, merge_tiers
 
 
 def spec(path, sid, kind="human", weight=1.0, **kw):
@@ -266,11 +267,72 @@ def test_interrupted_copy_leaves_no_partial_destination(make_tier, tmp_path, mon
 
     a = make_tier("a", recording="rec1", n_frames=1)
     out = tmp_path / "out"
+    monkeypatch.setattr(os, "link", _boom)
     monkeypatch.setattr(shutil, "copyfileobj", _boom)
     with pytest.raises(OSError):
         merge_tiers([spec(a, "a")], out, workers=1)
     assert list((out / "images").rglob("*.jpg")) == []
     assert list((out / "images").rglob("*.tmp")) == []
+
+
+def test_copy_image_hardlinks_when_possible(tmp_path):
+    src = tmp_path / "src.jpg"
+    src.write_bytes(b"payload")
+    dst = tmp_path / "out" / "src.jpg"
+    _copy_image(src, dst)
+    assert dst.read_bytes() == b"payload"
+    assert dst.stat().st_nlink > 1
+    assert dst.stat().st_ino == src.stat().st_ino
+
+
+def test_copy_image_falls_back_to_copy_when_link_fails(tmp_path, monkeypatch):
+    src = tmp_path / "src.jpg"
+    src.write_bytes(b"payload")
+    dst = tmp_path / "out" / "src.jpg"
+
+    def _boom(*_args, **_kwargs):
+        raise OSError("cross-device link")
+
+    monkeypatch.setattr(os, "link", _boom)
+    _copy_image(src, dst)
+    assert dst.read_bytes() == b"payload"
+    assert dst.stat().st_ino != src.stat().st_ino
+
+
+def test_copy_image_skips_identical_existing_destination(tmp_path):
+    src = tmp_path / "src.jpg"
+    src.write_bytes(b"payload")
+    dst = tmp_path / "out" / "src.jpg"
+    dst.parent.mkdir()
+    dst.write_bytes(b"payload")
+    inode_before = dst.stat().st_ino
+    _copy_image(src, dst)
+    assert dst.stat().st_ino == inode_before
+    assert dst.read_bytes() == b"payload"
+
+
+def test_copy_image_rejects_differing_destination(tmp_path):
+    src = tmp_path / "src.jpg"
+    src.write_bytes(b"payload")
+    dst = tmp_path / "out" / "src.jpg"
+    dst.parent.mkdir()
+    dst.write_bytes(b"different")
+    with pytest.raises(ValueError, match="differs between tiers"):
+        _copy_image(src, dst)
+
+
+def test_mask_remap_does_not_spin_a_pool_at_workers_one(make_tier, tmp_path, monkeypatch):
+    from tracking.curate import merge as merge_mod
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("ThreadPoolExecutor should not be used at workers=1")
+
+    a = make_tier("a", recording="rec1", n_frames=1)
+    write_mask(a, "rec1", "Cam01", 100, [1], [np.zeros((2, 2), bool)])
+    monkeypatch.setattr(merge_mod, "ThreadPoolExecutor", _boom)
+    out = tmp_path / "out"
+    manifest = merge_tiers([spec(a, "a")], out, copy_images=False, workers=1)
+    assert manifest["masks"]["files_written"] == 1
 
 
 def test_mask_collisions_across_multiple_destinations_stay_correct_under_the_pool(

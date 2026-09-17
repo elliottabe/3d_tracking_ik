@@ -33,12 +33,17 @@ class TierSpec:
 
 
 def _copy_image(src: Path, dst: Path) -> None:
-    """Copy following symlinks to a temp file then atomically replace; refuse a byte conflict."""
+    """Hardlink the real inode when possible, else copy atomically; refuse a byte conflict."""
     if dst.exists():
         if not filecmp.cmp(src, dst, shallow=False):
             raise ValueError(f"{dst.name} differs between tiers at the same path: {dst}")
         return
     dst.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.link(os.path.realpath(src), dst)
+        return
+    except OSError:
+        pass
     fd, tmp_name = tempfile.mkstemp(dir=dst.parent, prefix=f".{dst.name}.", suffix=".tmp")
     tmp_path = Path(tmp_name)
     try:
@@ -159,6 +164,14 @@ def _merge_masks(tiers, ann_maps, out_root, workers=64) -> dict:
             groups.setdefault(dst, []).append((p, ann_map))
 
     stats = {"files_written": 0, "rows_remapped": 0, "rows_dropped": 0, "collisions_merged": 0}
+    if workers == 1:
+        results = (_merge_mask_group(*item) for item in groups.items())
+        for rows_remapped, rows_dropped, collisions, wrote in results:
+            stats["rows_remapped"] += rows_remapped
+            stats["rows_dropped"] += rows_dropped
+            stats["collisions_merged"] += collisions
+            stats["files_written"] += int(wrote)
+        return stats
     with ThreadPoolExecutor(max_workers=workers) as pool:
         for rows_remapped, rows_dropped, collisions, wrote in pool.map(
             lambda item: _merge_mask_group(*item), groups.items()
@@ -171,7 +184,7 @@ def _merge_masks(tiers, ann_maps, out_root, workers=64) -> dict:
 
 
 def merge_tiers(
-    tiers, out_root, *, splits=schema.SPLITS, copy_images=True, masks=True, workers=64
+    tiers, out_root, *, splits=schema.SPLITS, copy_images=True, masks=True, workers=1
 ) -> dict:
     """Merge `tiers` into `out_root`; return the written manifest.
 

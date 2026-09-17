@@ -1,7 +1,8 @@
 # @package curate
 out_root: ${paths.train_data_root}
 masks_root: ${paths.masks_root}
-workers: 64
+# values above 1 measured slower than 1 on GPFS; raise only for a filesystem you've measured
+workers: 1
 
 # Input tiers, merged in this order. `path` is a root in the documented format.
 tiers:
