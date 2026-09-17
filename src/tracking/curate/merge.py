@@ -8,8 +8,11 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
+
 from tracking.curate import schema
 from tracking.curate.calib import calib_fingerprint
+from tracking.curate.masks.store import MaskStore, sidecar_path
 
 
 @dataclass(frozen=True)
@@ -73,7 +76,53 @@ def _preflight_calib_groups(tiers, calib_map):
     return resolved
 
 
-def merge_tiers(tiers, out_root, *, splits=schema.SPLITS, copy_images=True) -> dict:
+def _merge_masks(tiers, ann_maps, out_root) -> dict:
+    """Remap each tier's mask sidecar into `out_root`'s id space, merging on path collision.
+
+    >>> _merge_masks([], {}, "unified")  # doctest: +SKIP
+    {'files_written': 0, 'rows_remapped': 0, 'rows_dropped': 0, 'collisions_merged': 0}
+    """
+    dst_store = MaskStore(sidecar_path(out_root))
+    stats = {"files_written": 0, "rows_remapped": 0, "rows_dropped": 0, "collisions_merged": 0}
+    written: set[Path] = set()
+    for tier in tiers:
+        src_dir = Path(tier.path) / "masks"
+        if not src_dir.is_dir():
+            continue
+        ann_map = ann_maps[tier.source_id]
+        for p in sorted(src_dir.rglob("Frame_*.npz")):
+            rel = p.relative_to(src_dir)
+            if len(rel.parts) != 3:
+                raise ValueError(f"{p}: expected <recording>/<camera>/Frame_<n>.npz")
+            recording, camera, fname = rel.parts
+            frame = int(fname.removeprefix("Frame_").removesuffix(".npz"))
+            with np.load(p) as z:
+                old_ids = z["ann_ids"]
+                keep = np.array([int(a) in ann_map for a in old_ids], dtype=bool)
+                stats["rows_dropped"] += int((~keep).sum())
+                if not keep.any():
+                    continue
+                new_ids = np.array([ann_map[int(a)] for a in old_ids[keep]], dtype=np.int64)
+                kept_masks = z["masks"][keep]
+                kept_matched = (
+                    z["matched"][keep] if "matched" in z.files else np.ones(len(new_ids), bool)
+                )
+            stats["rows_remapped"] += len(new_ids)
+            dst = dst_store.path(recording, camera, frame)
+            if dst.exists():
+                stats["collisions_merged"] += 1
+                with np.load(dst) as prior:
+                    new_ids = np.concatenate([prior["ann_ids"], new_ids])
+                    kept_masks = np.concatenate([prior["masks"], kept_masks])
+                    kept_matched = np.concatenate([prior["matched"], kept_matched])
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            np.savez_compressed(dst, ann_ids=new_ids, masks=kept_masks, matched=kept_matched)
+            written.add(dst)
+    stats["files_written"] = len(written)
+    return stats
+
+
+def merge_tiers(tiers, out_root, *, splits=schema.SPLITS, copy_images=True, masks=True) -> dict:
     """Merge `tiers` into `out_root`; return the written manifest.
 
     >>> merge_tiers([TierSpec("human_root", "human_v12", "human")], "unified")  # doctest: +SKIP
@@ -102,6 +151,7 @@ def merge_tiers(tiers, out_root, *, splits=schema.SPLITS, copy_images=True) -> d
     sources: dict[str, dict] = {}
     recording_groups: dict[str, set[str]] = {}
     counts = dict.fromkeys(ids, 0)
+    tier_ann_maps: dict[str, dict[int, int]] = {i: {} for i in ids}
 
     for split in splits:
         images, annotations, framesets = [], [], {}
@@ -145,6 +195,7 @@ def merge_tiers(tiers, out_root, *, splits=schema.SPLITS, copy_images=True) -> d
                     "calib_group": new_group,
                 }
                 counts[tier.source_id] += 1
+            tier_ann_maps[tier.source_id].update(ann_map)
         schema.save_instances(
             out_root,
             split,
@@ -182,5 +233,7 @@ def merge_tiers(tiers, out_root, *, splits=schema.SPLITS, copy_images=True) -> d
         "calib_groups": sorted({v for v in calib_map.values()}),
         "recordings": recordings,
     }
+    if masks:
+        manifest["masks"] = _merge_masks(tiers, tier_ann_maps, out_root)
     schema.save_manifest(out_root, manifest)
     return manifest

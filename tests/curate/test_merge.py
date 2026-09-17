@@ -1,13 +1,24 @@
 import json
 
+import numpy as np
 import pytest
 
 from tracking.curate import schema
+from tracking.curate.masks.store import MaskStore, sidecar_path
 from tracking.curate.merge import TierSpec, merge_tiers
 
 
 def spec(path, sid, kind="human", weight=1.0, **kw):
     return TierSpec(path=path, source_id=sid, kind=kind, weight=weight, **kw)
+
+
+def write_mask(tier_root, recording, camera, frame, ann_ids, masks, matched=None):
+    p = tier_root / "masks" / recording / camera / f"Frame_{frame}.npz"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    matched = np.ones(len(ann_ids), bool) if matched is None else np.asarray(matched)
+    np.savez_compressed(
+        p, ann_ids=np.array(ann_ids, np.int64), masks=np.stack(masks), matched=matched
+    )
 
 
 def test_ids_are_renumbered_without_collision(make_tier, tmp_path):
@@ -135,3 +146,85 @@ def test_merged_root_validates_clean(make_tier, tmp_path):
         [spec(a, "a"), spec(b, "b", kind="pseudo", weight=0.3, checkpoint="/c")], tmp_path / "out"
     )
     assert [f for f in validate_root(tmp_path / "out") if f.level == "error"] == []
+
+
+def test_mask_ids_are_remapped_to_the_merged_id(make_tier, tmp_path):
+    a = make_tier("a", recording="rec1", n_frames=1)
+    b = make_tier("b", recording="rec2", n_frames=1)
+    mask = np.zeros((2, 2), bool)
+    mask[0, 1] = True
+    write_mask(b, "rec2", "Cam01", 100, [1], [mask])
+    out = tmp_path / "out"
+    manifest = merge_tiers([spec(a, "a"), spec(b, "b")], out, copy_images=False)
+    coco = schema.load_instances(out, "train")
+    b_first_new_id = next(
+        fs["ann_ids"][0]
+        for fs in coco["framesets"].values()
+        if fs["source_id"] == "b" and fs["recording"] == "rec2"
+    )
+    store = MaskStore(sidecar_path(out))
+    loaded = store.load("rec2", "Cam01", 100, b_first_new_id)
+    assert loaded is not None
+    assert np.array_equal(loaded, mask)
+    assert manifest["masks"] == {
+        "files_written": 1,
+        "rows_remapped": 1,
+        "rows_dropped": 0,
+        "collisions_merged": 0,
+    }
+
+
+def test_mask_rows_that_do_not_survive_are_dropped(make_tier, tmp_path):
+    a = make_tier("a", recording="rec1", n_frames=1)
+    surviving = np.zeros((2, 2), bool)
+    stray = np.ones((2, 2), bool)
+    write_mask(a, "rec1", "Cam01", 100, [1, 9999], [surviving, stray], matched=[True, False])
+    out = tmp_path / "out"
+    manifest = merge_tiers([spec(a, "a")], out, copy_images=False)
+    store = MaskStore(sidecar_path(out))
+    assert np.array_equal(store.load("rec1", "Cam01", 100, 1), surviving)
+    assert store.load("rec1", "Cam01", 100, 9999) is None
+    p = store.path("rec1", "Cam01", 100)
+    with np.load(p) as z:
+        assert z["ann_ids"].tolist() == [1]
+    assert manifest["masks"]["rows_dropped"] == 1
+    assert manifest["masks"]["rows_remapped"] == 1
+
+
+def test_mask_file_dropped_entirely_when_no_row_survives(make_tier, tmp_path):
+    a = make_tier("a", recording="rec1", n_frames=1)
+    write_mask(a, "rec1", "Cam01", 100, [9999], [np.zeros((2, 2), bool)])
+    out = tmp_path / "out"
+    manifest = merge_tiers([spec(a, "a")], out, copy_images=False)
+    assert not MaskStore(sidecar_path(out)).path("rec1", "Cam01", 100).exists()
+    assert manifest["masks"]["files_written"] == 0
+    assert manifest["masks"]["rows_dropped"] == 1
+
+
+def test_mask_collision_between_tiers_is_merged_not_clobbered(make_tier, tmp_path):
+    a = make_tier("a", recording="rec1", n_frames=1, calib_seed=0)
+    b = make_tier("b", recording="rec1", n_frames=1, calib_seed=1)
+    mask_a = np.zeros((2, 2), bool)
+    mask_b = np.ones((2, 2), bool)
+    write_mask(a, "rec1", "Cam01", 100, [1], [mask_a])
+    write_mask(b, "rec1", "Cam01", 100, [1], [mask_b])
+    out = tmp_path / "out"
+    manifest = merge_tiers([spec(a, "a"), spec(b, "b")], out, copy_images=False)
+    coco = schema.load_instances(out, "train")
+    a_id = next(fs["ann_ids"][0] for fs in coco["framesets"].values() if fs["source_id"] == "a")
+    b_id = next(fs["ann_ids"][0] for fs in coco["framesets"].values() if fs["source_id"] == "b")
+    store = MaskStore(sidecar_path(out))
+    assert np.array_equal(store.load("rec1", "Cam01", 100, a_id), mask_a)
+    assert np.array_equal(store.load("rec1", "Cam01", 100, b_id), mask_b)
+    assert manifest["masks"]["collisions_merged"] == 1
+    assert manifest["masks"]["files_written"] == 1
+    assert manifest["masks"]["rows_remapped"] == 2
+
+
+def test_masks_false_skips_the_whole_step(make_tier, tmp_path):
+    a = make_tier("a", recording="rec1", n_frames=1)
+    write_mask(a, "rec1", "Cam01", 100, [1], [np.zeros((2, 2), bool)])
+    out = tmp_path / "out"
+    manifest = merge_tiers([spec(a, "a")], out, copy_images=False, masks=False)
+    assert "masks" not in manifest
+    assert not sidecar_path(out).exists()

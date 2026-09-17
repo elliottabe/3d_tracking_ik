@@ -100,6 +100,13 @@ omitting it never touches the core root's checksums.
 directory into this layer. No SAM driver is ported -- users bring their own
 segmentation.
 
+A tier's own `masks/` sidecar is keyed by *that tier's* annotation ids, which
+`merge` renumbers into the unified root's id space. `merge_tiers` (not a
+verbatim copy) is what produces `<out_root>_masks/`: it remaps every mask's
+`ann_ids` through the same per-tier id map used for `annotations[]`, dropping
+rows whose id did not survive into the merged root and combining rows from
+different tiers that land on the same `(recording, camera, frame)` path.
+
 ## This repository does not generate pseudo-labels
 
 The pseudo tiers (`pseudo`, `negative`, `singlefly`) are **input data** with
