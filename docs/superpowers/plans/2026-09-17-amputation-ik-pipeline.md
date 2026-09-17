@@ -748,8 +748,10 @@ def test_filtered_anatomy_still_measures_five_legs(tmp_path):
     cfg.recording.kp3d_csv = str(_csv(tmp_path, tracked))
 
     anatomy = _load_anatomy(cfg)
+    # 16, not 20: only T1L and T1R carry a ThxCx keypoint, so T2L/T2R/T3L/T3R
+    # contribute 3 pairs each and T1R 4. 20 is the INTACT anatomy's count.
     pairs = rigid_segment_pairs(anatomy.kp_order)
-    assert len(pairs) == 20
+    assert len(pairs) == 16
     assert not any(a.startswith("T1L") or b.startswith("T1L") for a, b in pairs)
 ```
 

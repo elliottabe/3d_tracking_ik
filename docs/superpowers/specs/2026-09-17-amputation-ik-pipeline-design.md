@@ -127,7 +127,9 @@ Because `kp_order` is shortened rather than NaN-filled, every downstream
 consumer works *by construction* instead of by NaN tolerance:
 
 - `scale.rigid_segment_pairs` guards `if a in names and b in names`, so the
-  T1L chain contributes zero pairs and the other five legs still give 20.
+  T1L chain contributes zero pairs and the other five legs still give 16
+  (T1R gives 4; T2L/T2R/T3L/T3R give 3 each -- only T1L and T1R have a
+  `ThxCx` keypoint, so the other four legs' chains start one joint later).
 - `qc.invariants` has no T1L segment to call collapsed.
 - `qc.coverage` reports on the 44 keypoints that exist rather than showing
   six permanently-empty rows.
@@ -380,7 +382,8 @@ TDD. Small synthetic fixtures except where noted.
   count refuses rather than truncating.
 - **Anatomy filtering** — `load_anatomy(strict=False)` with the 44 tracked
   names yields a 44-long `kp_order` with no `T1L_Tro…TaTip`, and
-  `rigid_segment_pairs` returns 20 pairs from the remaining five legs.
+  `rigid_segment_pairs` returns 16 pairs from the remaining five legs
+  (20 is the INTACT anatomy's count; only T1L/T1R carry `ThxCx`).
 - **Rigless spec** — `validate()` passes with `calib_dir=None` and empty
   `cameras`; refuses `calib_dir=None` with a non-empty `cameras`.
 - **`bout_qc(rig=None)`** — no `reproj`/`loo` keys; `posture` still
