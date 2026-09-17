@@ -64,12 +64,12 @@ def _check_calibrations(root, out):
     return names_seen
 
 
-def _check_split(root, split, kp_order, sources, out):
+def _check_split(root, split, kp_order, sources, recordings, out):
     """Check one split's instances file; corrupt JSON is already reported by `_check_keypoints`."""
     try:
         coco = schema.load_instances(root, split)
     except (OSError, json.JSONDecodeError):
-        return
+        return set()
     missing_keys = [k for k in ("images", "annotations", "framesets") if k not in coco]
     if missing_keys:
         out.append(_err("split_missing_keys", f"{split}: missing key(s) {missing_keys}"))
@@ -147,6 +147,7 @@ def _check_split(root, split, kp_order, sources, out):
         )
         framesets = {}
 
+    referenced_groups: set[str] = set()
     for key, fs in framesets.items():
         frames, ann_ids = fs.get("frames", []), fs.get("ann_ids", [])
         if len(frames) != len(ann_ids):
@@ -173,6 +174,19 @@ def _check_split(root, split, kp_order, sources, out):
         sid = fs.get("source_id")
         if sid is not None and sid not in sources:
             out.append(_err("unknown_source_id", f"{key}: source_id {sid!r} not in manifest"))
+        fs_group = fs.get("calib_group")
+        if fs_group is not None:
+            referenced_groups.add(fs_group)
+        else:
+            rec_entry = recordings.get(fs.get("recording"))
+            rec_entry = rec_entry if isinstance(rec_entry, dict) else {}
+            if rec_entry.get("calib_group") is None and not rec_entry.get("calib_groups"):
+                out.append(
+                    _err(
+                        "frameset_calib_unresolvable",
+                        f"{key}: no calib_group on the frameset or its recording",
+                    )
+                )
 
     per_image = Counter(a["image_id"] for a in good_anns if "image_id" in a)
     n_zero = max(0, len(images) - len(per_image))
@@ -204,6 +218,8 @@ def _check_split(root, split, kp_order, sources, out):
             )
         )
 
+    return referenced_groups
+
 
 def validate_root(root: str | Path, *, masks_root: str | Path | None = None) -> list[Finding]:
     """Every check from the format spec, as a flat finding list.
@@ -219,12 +235,21 @@ def validate_root(root: str | Path, *, masks_root: str | Path | None = None) -> 
     except (OSError, json.JSONDecodeError) as exc:
         out.append(_err("manifest_unreadable", str(exc)))
         return out
+    recordings = manifest.get("recordings", {})
     referenced = set(manifest.get("calib_groups", []))
-    referenced |= {
-        r.get("calib_group") for r in manifest.get("recordings", {}).values() if isinstance(r, dict)
-    }
-    for group in sorted(referenced - names_seen.keys() - {None}):
-        out.append(_err("calib_group_missing", f"calib_group {group!r} has no calibrations/ dir"))
+    for rec, r in recordings.items():
+        if not isinstance(r, dict):
+            continue
+        referenced.add(r.get("calib_group"))
+        referenced.update(r.get("calib_groups") or [])
+        if len(r.get("calib_groups", [])) > 1:
+            out.append(
+                Finding(
+                    "info",
+                    "recording_multi_calib",
+                    f"{rec}: spans calib_groups {r['calib_groups']}",
+                )
+            )
     try:
         srcs = schema.sources(manifest)
     except (KeyError, ValueError) as exc:
@@ -240,7 +265,9 @@ def validate_root(root: str | Path, *, masks_root: str | Path | None = None) -> 
                 )
             )
     for split in schema.SPLITS:
-        _check_split(root, split, kp_order, srcs, out)
+        referenced |= _check_split(root, split, kp_order, srcs, recordings, out)
+    for group in sorted(referenced - names_seen.keys() - {None}):
+        out.append(_err("calib_group_missing", f"calib_group {group!r} has no calibrations/ dir"))
     if masks_root is not None and not Path(masks_root).exists():
         out.append(
             Finding(

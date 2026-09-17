@@ -241,6 +241,30 @@ def test_calib_group_missing_from_disk_is_an_error(make_tier):
     assert "calib_group_missing" in codes(validate.validate_root(root), "error")
 
 
+def test_recording_spanning_two_calib_groups_is_an_info_finding(make_tier):
+    root = make_tier("t")
+    man = json.loads((root / "manifest.json").read_text())
+    del man["recordings"]["rec1"]["calib_group"]
+    man["recordings"]["rec1"]["calib_groups"] = ["A", "B"]
+    (root / "manifest.json").write_text(json.dumps(man))
+    coco = json.loads((root / "annotations" / "instances_train.json").read_text())
+    for fs in coco["framesets"].values():
+        fs["calib_group"] = "A"
+    (root / "annotations" / "instances_train.json").write_text(json.dumps(coco))
+    findings = validate.validate_root(root)
+    info = [f for f in findings if f.code == "recording_multi_calib"]
+    assert len(info) == 1
+    assert "A" in info[0].message and "B" in info[0].message
+
+
+def test_frameset_without_any_calib_group_is_an_error(make_tier):
+    root = make_tier("t")
+    man = json.loads((root / "manifest.json").read_text())
+    del man["recordings"]["rec1"]["calib_group"]
+    (root / "manifest.json").write_text(json.dumps(man))
+    assert "frameset_calib_unresolvable" in codes(validate.validate_root(root), "error")
+
+
 def test_malformed_recording_value_does_not_crash(make_tier):
     root = make_tier("t")
     man = json.loads((root / "manifest.json").read_text())

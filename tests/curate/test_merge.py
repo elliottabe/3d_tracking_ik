@@ -54,6 +54,13 @@ def test_every_frameset_gets_its_source_id(make_tier, tmp_path):
     assert {fs["source_id"] for fs in coco["framesets"].values()} == {"human_v1"}
 
 
+def test_every_frameset_gets_a_calib_group(make_tier, tmp_path):
+    a = make_tier("a", recording="rec1")
+    merge_tiers([spec(a, "human_v1")], tmp_path / "out")
+    coco = schema.load_instances(tmp_path / "out", "train")
+    assert all(fs["calib_group"] == "A" for fs in coco["framesets"].values())
+
+
 def test_duplicate_source_id_is_rejected(make_tier, tmp_path):
     a, b = make_tier("a", recording="rec1"), make_tier("b", recording="rec2")
     with pytest.raises(ValueError, match="duplicate source_id"):
@@ -81,20 +88,33 @@ def test_keypoint_name_disagreement_is_rejected(make_tier, tmp_path):
         merge_tiers([spec(a, "a"), spec(b, "b")], tmp_path / "out")
 
 
-def test_cross_tier_calib_conflict_is_rejected(make_tier, tmp_path):
+def test_cross_tier_calib_conflict_is_recorded_per_frameset(make_tier, tmp_path):
     a = make_tier("a", recording="rec1", calib_seed=0)
     b = make_tier("b", recording="rec1", calib_seed=1)
-    with pytest.raises(ValueError, match="calib_group conflict"):
-        merge_tiers([spec(a, "a"), spec(b, "b")], tmp_path / "out", copy_images=False)
+    manifest = merge_tiers([spec(a, "a"), spec(b, "b")], tmp_path / "out", copy_images=False)
+    assert manifest["recordings"]["rec1"]["calib_groups"] == ["A", "B"]
+    assert "calib_group" not in manifest["recordings"]["rec1"]
+    coco = schema.load_instances(tmp_path / "out", "train")
+    by_source = {fs["source_id"]: fs["calib_group"] for fs in coco["framesets"].values()}
+    assert by_source == {"a": "A", "b": "B"}
 
 
-def test_calib_conflict_is_caught_before_any_image_is_copied(make_tier, tmp_path):
+def test_cross_tier_calib_conflict_still_copies_images(make_tier, tmp_path):
     a = make_tier("a", recording="rec1", calib_seed=0)
     b = make_tier("b", recording="rec1", calib_seed=1)
     out = tmp_path / "out"
-    with pytest.raises(ValueError, match="calib_group conflict"):
-        merge_tiers([spec(a, "a"), spec(b, "b")], out, copy_images=True)
-    assert not (out / "images").exists() or not any((out / "images").iterdir())
+    merge_tiers([spec(a, "a"), spec(b, "b")], out, copy_images=True)
+    assert any((out / "images").iterdir())
+
+
+def test_agreeing_tiers_get_a_single_recording_calib_group(make_tier, tmp_path):
+    a = make_tier("a", recording="rec1", calib_seed=0)
+    b = make_tier("b", recording="rec1", calib_seed=0)
+    manifest = merge_tiers([spec(a, "a"), spec(b, "b")], tmp_path / "out", copy_images=False)
+    assert manifest["recordings"]["rec1"]["calib_group"] == "A"
+    assert "calib_groups" not in manifest["recordings"]["rec1"]
+    coco = schema.load_instances(tmp_path / "out", "train")
+    assert {fs["calib_group"] for fs in coco["framesets"].values()} == {"A"}
 
 
 def test_missing_calib_group_in_manifest_is_rejected(make_tier, tmp_path):
