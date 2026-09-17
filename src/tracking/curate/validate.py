@@ -220,7 +220,9 @@ def validate_root(root: str | Path, *, masks_root: str | Path | None = None) -> 
         out.append(_err("manifest_unreadable", str(exc)))
         return out
     referenced = set(manifest.get("calib_groups", []))
-    referenced |= {r.get("calib_group") for r in manifest.get("recordings", {}).values()}
+    referenced |= {
+        r.get("calib_group") for r in manifest.get("recordings", {}).values() if isinstance(r, dict)
+    }
     for group in sorted(referenced - names_seen.keys() - {None}):
         out.append(_err("calib_group_missing", f"calib_group {group!r} has no calibrations/ dir"))
     try:

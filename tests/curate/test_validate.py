@@ -241,6 +241,15 @@ def test_calib_group_missing_from_disk_is_an_error(make_tier):
     assert "calib_group_missing" in codes(validate.validate_root(root), "error")
 
 
+def test_malformed_recording_value_does_not_crash(make_tier):
+    root = make_tier("t")
+    man = json.loads((root / "manifest.json").read_text())
+    man["recordings"]["rec1"] = None
+    (root / "manifest.json").write_text(json.dumps(man))
+    findings = validate.validate_root(root)
+    assert isinstance(findings, list)
+
+
 def test_duplicate_file_name_across_images_is_a_warning(make_tier):
     root = make_tier("t")
     coco = json.loads((root / "annotations" / "instances_train.json").read_text())
