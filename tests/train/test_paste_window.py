@@ -1,3 +1,11 @@
+"""Real-unified-root tests for the donor pool and `WindowDataset.paste_window`
+/ `__getitem__` copy-paste wiring.
+
+`MULTI_GROUP_REC` spans calibration groups A and C (the 2026-04-02 mid-day
+recalibration); `SMALL_REC` is a small single-group recording, cheap to run
+several real `paste_window()` calls against.
+"""
+
 import dataclasses
 import os
 
@@ -11,9 +19,7 @@ ROOT = "/gscratch/portia/eabe/data/Johnson_lab/red_data/unified_v2"
 MASKS = ROOT + "_masks"
 pytestmark = pytest.mark.skipif(not os.path.isdir(ROOT), reason="unified root not present")
 
-# 2026_04_02_17_28_34 spans calibration groups A and C (mid-day recalibration).
 MULTI_GROUP_REC = "2026_04_02_17_28_34"
-# Small single-group recording, cheap to run several real paste_window() calls on.
 SMALL_REC = "2026_01_29_14_09_33"
 
 
