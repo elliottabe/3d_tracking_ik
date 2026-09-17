@@ -188,6 +188,9 @@ def merge_tiers(
 ) -> dict:
     """Merge `tiers` into `out_root`; return the written manifest.
 
+    Image and annotation ids are unique across the root, not just within one
+    split file -- the mask sidecar keys rows by annotation id alone.
+
     >>> merge_tiers([TierSpec("human_root", "human_v12", "human")], "unified")  # doctest: +SKIP
     {'version': 'unified', 'sources': {...}, ...}
     """
@@ -216,9 +219,9 @@ def merge_tiers(
     counts = dict.fromkeys(ids, 0)
     tier_ann_maps: dict[str, dict[int, int]] = {i: {} for i in ids}
 
+    next_img = next_ann = 1
     for split in splits:
         images, annotations, framesets = [], [], {}
-        next_img = next_ann = 1
         for tier in tiers:
             try:
                 coco = schema.load_instances(tier.path, split)

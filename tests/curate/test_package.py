@@ -29,7 +29,7 @@ def test_tiers_are_named(make_tier, tmp_path):
 def test_all_tier_contains_both_sources(make_tier, tmp_path):
     root = build(make_tier, tmp_path)
     summary = package_root(root, tmp_path / "all.zip", tier="all")
-    assert summary["n_framesets"] == 4
+    assert summary["n_framesets"] == 6
     with zipfile.ZipFile(tmp_path / "all.zip") as z:
         assert any(n.endswith("DATASET.md") for n in z.namelist())
         assert any(n.endswith("CHECKSUMS") for n in z.namelist())
@@ -38,7 +38,7 @@ def test_all_tier_contains_both_sources(make_tier, tmp_path):
 def test_human_tier_drops_pseudo_framesets(make_tier, tmp_path):
     root = build(make_tier, tmp_path)
     summary = package_root(root, tmp_path / "human.zip", tier="human")
-    assert summary["n_framesets"] == 2
+    assert summary["n_framesets"] == 3
     with zipfile.ZipFile(tmp_path / "human.zip") as z:
         coco = json.loads(z.read("annotations/instances_train.json"))
         assert {fs["source_id"] for fs in coco["framesets"].values()} == {"human_v1"}

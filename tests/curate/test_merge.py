@@ -325,3 +325,39 @@ def test_mask_collisions_across_multiple_destinations_stay_correct_under_the_poo
     assert np.array_equal(store.load("rec1", "Cam02", 100, b_fs["ann_ids"][1]), mask_b2)
     assert manifest["masks"]["collisions_merged"] == 2
     assert manifest["masks"]["files_written"] == 2
+
+
+def test_annotation_and_image_ids_are_unique_across_splits(make_tier, tmp_path):
+    a = make_tier("a", recording="rec1")
+    b = make_tier("b", recording="rec2")
+    out = tmp_path / "out"
+    merge_tiers([spec(a, "a"), spec(b, "b")], out, copy_images=False)
+    train, val = schema.load_instances(out, "train"), schema.load_instances(out, "val")
+    assert val["annotations"] and val["framesets"]
+    assert not {x["id"] for x in train["annotations"]} & {x["id"] for x in val["annotations"]}
+    assert not {i["id"] for i in train["images"]} & {i["id"] for i in val["images"]}
+
+
+def test_frameset_ann_ids_resolve_in_the_sidecar_when_both_splits_are_populated(
+    make_tier, tmp_path
+):
+    a = make_tier("a", recording="rec1", n_frames=1, first_frame=200, val_frames=0)
+    b = make_tier("b", recording="rec1", n_frames=1, val_frames=1, val_first_frame=200)
+    mask_a, mask_b = np.zeros((2, 2), bool), np.ones((2, 2), bool)
+    write_mask(a, "rec1", "Cam01", 200, [1], [mask_a])
+    write_mask(b, "rec1", "Cam01", 200, [4], [mask_b])
+    out = tmp_path / "out"
+    merge_tiers([spec(a, "a"), spec(b, "b")], out, copy_images=False)
+    store = MaskStore(sidecar_path(out))
+    for split, expected in (("train", mask_a), ("val", mask_b)):
+        coco = schema.load_instances(out, split)
+        names = {i["id"]: i["file_name"] for i in coco["images"]}
+        for fs in coco["framesets"].values():
+            for img_id, ann_id in zip(fs["frames"], fs["ann_ids"], strict=True):
+                rec, cam, fname = names[img_id].split("/")
+                frame = int(fname.removeprefix("Frame_").removesuffix(".jpg"))
+                if not store.has(rec, cam, frame):
+                    continue
+                loaded = store.load(rec, cam, frame, ann_id)
+                assert loaded is not None, f"{split} {fs} ann {ann_id} missing from {names[img_id]}"
+                assert np.array_equal(loaded, expected)

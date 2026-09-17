@@ -4,6 +4,8 @@ import cv2
 import numpy as np
 
 from tracking.curate import validate
+from tracking.curate.masks.store import MaskStore, sidecar_path
+from tracking.curate.merge import TierSpec, merge_tiers
 
 
 def codes(findings, level=None):
@@ -17,7 +19,7 @@ def test_clean_root_has_no_errors(make_tier):
 def test_reports_two_fly_fraction_as_info(make_tier):
     findings = validate.validate_root(make_tier("t", fly_ids=(0, 1)))
     info = [f for f in findings if f.code == "two_fly_fraction"]
-    assert len(info) == 1 and info[0].level == "info"
+    assert len(info) == 2 and {f.level for f in info} == {"info"}
 
 
 def test_keypoint_name_mismatch_is_an_error(make_tier):
@@ -302,3 +304,49 @@ def test_symlink_offender_count_is_reported(make_tier, tmp_path):
     findings = [f for f in validate.validate_root(root) if f.code == "image_is_symlink"]
     assert len(findings) == 1
     assert "2 total" in findings[0].message
+
+
+def merged_with_masks(make_tier, tmp_path, frames=(100,), n_frames=1):
+    root = make_tier("a", recording="rec1", n_frames=n_frames)
+    for frame in frames:
+        p = root / "masks" / "rec1" / "Cam01" / f"Frame_{frame}.npz"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        ann_id = 1 + 3 * (frame - 100)
+        np.savez_compressed(p, ann_ids=np.array([ann_id], np.int64), masks=np.ones((1, 2, 2), bool))
+    out = tmp_path / "out"
+    merge_tiers([TierSpec(root, "human_v1", "human", 1.0)], out)
+    return out, sidecar_path(out)
+
+
+def break_sidecar_row(sidecar, frame):
+    p = MaskStore(sidecar).path("rec1", "Cam01", frame)
+    with np.load(p) as z:
+        data = {k: z[k] for k in z.files}
+    np.savez_compressed(p, **{**data, "ann_ids": np.array([9999], np.int64)})
+
+
+def test_mask_file_without_the_frameset_ann_id_is_a_warning(make_tier, tmp_path):
+    root, sidecar = merged_with_masks(make_tier, tmp_path)
+    break_sidecar_row(sidecar, 100)
+    findings = validate.validate_root(root, masks_root=sidecar)
+    assert "mask_ann_unresolved" in codes(findings, "warning")
+    assert codes(findings, "error") == set()
+
+
+def test_resolvable_mask_rows_are_not_a_finding(make_tier, tmp_path):
+    root, sidecar = merged_with_masks(make_tier, tmp_path)
+    assert "mask_ann_unresolved" not in codes(validate.validate_root(root, masks_root=sidecar))
+
+
+def test_frames_without_a_mask_file_are_not_a_finding(make_tier, tmp_path):
+    root, sidecar = merged_with_masks(make_tier, tmp_path)
+    MaskStore(sidecar).path("rec1", "Cam01", 100).unlink()
+    assert "mask_ann_unresolved" not in codes(validate.validate_root(root, masks_root=sidecar))
+
+
+def test_mask_check_stops_at_the_sample_cap(make_tier, tmp_path, monkeypatch):
+    root, sidecar = merged_with_masks(make_tier, tmp_path, frames=(100, 101), n_frames=2)
+    break_sidecar_row(sidecar, 101)
+    assert "mask_ann_unresolved" in codes(validate.validate_root(root, masks_root=sidecar))
+    monkeypatch.setattr(validate, "MASK_SAMPLE", 1)
+    assert "mask_ann_unresolved" not in codes(validate.validate_root(root, masks_root=sidecar))

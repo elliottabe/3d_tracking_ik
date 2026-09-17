@@ -52,14 +52,28 @@ def _write_image(path, seed):
 
 @pytest.fixture
 def make_tier(tmp_path, make_calib_dir):
-    """Build a minimal tier root. Returns its path.
+    """Build a minimal tier root with both splits populated. Returns its path.
 
-    >>> root = make_tier("human", n_frames=2)          # doctest: +SKIP
+    Ids are unique across the tier's two split files, as a real tier's are:
+    `instances_val.json` continues the numbering `instances_train.json` ends on.
+
+    >>> root = make_tier("human", n_frames=2, val_frames=1)        # doctest: +SKIP
     >>> (root / "annotations" / "instances_train.json").exists()   # doctest: +SKIP
     True
     """
 
-    def _make(name, *, n_frames=2, recording="rec1", calib_seed=0, source=None, fly_ids=(0,)):
+    def _make(
+        name,
+        *,
+        n_frames=2,
+        recording="rec1",
+        calib_seed=0,
+        source=None,
+        fly_ids=(0,),
+        val_frames=1,
+        first_frame=100,
+        val_first_frame=200,
+    ):
         root = tmp_path / name
         (root / "annotations").mkdir(parents=True)
         calib = make_calib_dir(f"{name}_calib", seed=calib_seed)
@@ -68,67 +82,67 @@ def make_tier(tmp_path, make_calib_dir):
         for f in sorted(calib.glob("Cam*.yaml")):
             (group_dir / f.name).write_bytes(f.read_bytes())
 
-        images, annotations, framesets = [], [], {}
-        img_id = ann_id = 1
-        for f in range(n_frames):
-            frame = 100 + f
-            per_fly_ids = {}
-            frame_img_ids = []
-            for cam in CAMERAS:
-                rel = f"{recording}/{cam}/Frame_{frame}.jpg"
-                _write_image(root / "images" / rel, img_id)
-                images.append(
-                    {
-                        "id": img_id,
-                        "width": W,
-                        "height": H,
-                        "recording": recording,
-                        "file_name": rel,
-                    }
-                )
-                frame_img_ids.append(img_id)
-                for fly in fly_ids:
-                    kp = []
-                    for k in range(len(KP_NAMES)):
-                        kp += [5.0 + k + fly, 6.0 + k + fly, 2]
-                    annotations.append(
+        def split_coco(frames, img_id, ann_id):
+            images, annotations, framesets = [], [], {}
+            for frame in frames:
+                per_fly_ids = {}
+                frame_img_ids = []
+                for cam in CAMERAS:
+                    rel = f"{recording}/{cam}/Frame_{frame}.jpg"
+                    _write_image(root / "images" / rel, img_id)
+                    images.append(
                         {
-                            "id": ann_id,
-                            "image_id": img_id,
-                            "bbox": [4.0, 5.0, 8.0, 8.0],
-                            "keypoints": kp,
-                            "num_keypoints": len(KP_NAMES),
-                            "fly_id": fly,
-                            "sex": "female",
-                            "subset": name,
+                            "id": img_id,
+                            "width": W,
+                            "height": H,
+                            "recording": recording,
+                            "file_name": rel,
                         }
                     )
-                    per_fly_ids.setdefault(fly, []).append(ann_id)
-                    ann_id += 1
-                img_id += 1
-            for fly in fly_ids:
-                fs = {
-                    "recording": recording,
-                    "fly_id": fly,
-                    "frames": frame_img_ids,
-                    "ann_ids": per_fly_ids[fly],
-                }
-                if source:
-                    fs.update(source)
-                framesets[f"{recording}/Frame_{frame}/fly{fly}"] = fs
+                    frame_img_ids.append(img_id)
+                    for fly in fly_ids:
+                        kp = []
+                        for k in range(len(KP_NAMES)):
+                            kp += [5.0 + k + fly, 6.0 + k + fly, 2]
+                        annotations.append(
+                            {
+                                "id": ann_id,
+                                "image_id": img_id,
+                                "bbox": [4.0, 5.0, 8.0, 8.0],
+                                "keypoints": kp,
+                                "num_keypoints": len(KP_NAMES),
+                                "fly_id": fly,
+                                "sex": "female",
+                                "subset": name,
+                            }
+                        )
+                        per_fly_ids.setdefault(fly, []).append(ann_id)
+                        ann_id += 1
+                    img_id += 1
+                for fly in fly_ids:
+                    fs = {
+                        "recording": recording,
+                        "fly_id": fly,
+                        "frames": frame_img_ids,
+                        "ann_ids": per_fly_ids[fly],
+                    }
+                    if source:
+                        fs.update(source)
+                    framesets[f"{recording}/Frame_{frame}/fly{fly}"] = fs
+            coco = {
+                "keypoint_names": KP_NAMES,
+                "skeleton": [],
+                "categories": [],
+                "images": images,
+                "annotations": annotations,
+                "framesets": framesets,
+            }
+            return coco, img_id, ann_id
 
-        coco = {
-            "keypoint_names": KP_NAMES,
-            "skeleton": [],
-            "categories": [],
-            "images": images,
-            "annotations": annotations,
-            "framesets": framesets,
-        }
-        (root / "annotations" / "instances_train.json").write_text(json.dumps(coco))
-        (root / "annotations" / "instances_val.json").write_text(
-            json.dumps({**coco, "images": [], "annotations": [], "framesets": {}})
-        )
+        train, img_id, ann_id = split_coco(range(first_frame, first_frame + n_frames), 1, 1)
+        val, _, _ = split_coco(range(val_first_frame, val_first_frame + val_frames), img_id, ann_id)
+        (root / "annotations" / "instances_train.json").write_text(json.dumps(train))
+        (root / "annotations" / "instances_val.json").write_text(json.dumps(val))
         (root / "annotations" / "keypoint_names.json").write_text(json.dumps(KP_NAMES))
         (root / "manifest.json").write_text(
             json.dumps(

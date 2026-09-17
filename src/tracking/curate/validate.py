@@ -10,11 +10,13 @@ from pathlib import Path
 import numpy as np
 
 from tracking.curate import schema
+from tracking.curate.masks.store import MaskStore
 from tracking.geometry.rig import CameraRig
 from tracking.io.names import OrderMismatch
 
 MIN_CAMS = 3
 LEVELS = ("error", "warning", "info")
+MASK_SAMPLE = 200
 
 
 @dataclass(frozen=True)
@@ -221,6 +223,57 @@ def _check_split(root, split, kp_order, sources, recordings, out):
     return referenced_groups
 
 
+def _check_mask_ann_ids(root, masks_root, split, out):
+    """Warn when a frameset's ann_ids have no row in the mask file of their frame.
+
+    Reads at most the first `MASK_SAMPLE` framesets of the split: a real root
+    carries ~145k sidecar files and opening them all would dominate the run.
+    A frame with no mask file at all is skipped, not reported -- a tier
+    without masks legitimately has none.
+    """
+    store = MaskStore(masks_root)
+    try:
+        coco = schema.load_instances(root, split)
+    except (OSError, json.JSONDecodeError):
+        return
+    names = {
+        i["id"]: i["file_name"] for i in coco.get("images", []) if "id" in i and "file_name" in i
+    }
+    framesets = coco.get("framesets", {})
+    if not isinstance(framesets, dict):
+        return
+    checked = unresolved = 0
+    first = None
+    for key, fs in list(framesets.items())[:MASK_SAMPLE]:
+        if not isinstance(fs, dict):
+            continue
+        for img_id, ann_id in zip(fs.get("frames", []), fs.get("ann_ids", []), strict=False):
+            rel = names.get(img_id)
+            if ann_id is None or rel is None or rel.count("/") != 2:
+                continue
+            recording, camera, fname = rel.split("/")
+            try:
+                frame = int(fname.removeprefix("Frame_").rsplit(".", 1)[0])
+                if not store.has(recording, camera, frame):
+                    continue
+                found = store.load(recording, camera, frame, ann_id) is not None
+            except Exception:
+                continue
+            checked += 1
+            unresolved += not found
+            if not found and first is None:
+                first = f"{key}: {rel} has no mask row for ann {ann_id}"
+    if unresolved:
+        out.append(
+            Finding(
+                "warning",
+                "mask_ann_unresolved",
+                f"{split}: {unresolved}/{checked} sampled frameset slot(s) have a mask "
+                f"file that does not carry their annotation id ({first})",
+            )
+        )
+
+
 def validate_root(root: str | Path, *, masks_root: str | Path | None = None) -> list[Finding]:
     """Every check from the format spec, as a flat finding list.
 
@@ -268,14 +321,18 @@ def validate_root(root: str | Path, *, masks_root: str | Path | None = None) -> 
         referenced |= _check_split(root, split, kp_order, srcs, recordings, out)
     for group in sorted(referenced - names_seen.keys() - {None}):
         out.append(_err("calib_group_missing", f"calib_group {group!r} has no calibrations/ dir"))
-    if masks_root is not None and not Path(masks_root).exists():
-        out.append(
-            Finding(
-                "warning",
-                "masks_root_missing",
-                f"{masks_root} does not exist; copy-paste will be off",
+    if masks_root is not None:
+        if not Path(masks_root).exists():
+            out.append(
+                Finding(
+                    "warning",
+                    "masks_root_missing",
+                    f"{masks_root} does not exist; copy-paste will be off",
+                )
             )
-        )
+        else:
+            for split in schema.SPLITS:
+                _check_mask_ann_ids(root, masks_root, split, out)
     return out
 
 
