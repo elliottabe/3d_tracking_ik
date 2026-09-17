@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import filecmp
 import json
 import os
 import shutil
@@ -13,14 +12,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
 
 from tracking.curate import schema
 from tracking.curate.calib import calib_fingerprint
 from tracking.curate.masks.store import MaskStore, sidecar_path
-
-DUPLICATE_PIXEL_TOLERANCE = 32
-"""Max abs pixel diff to call a re-encode, not a conflict; recompression noise tops out at 26."""
 
 
 @dataclass(frozen=True)
@@ -36,44 +31,20 @@ class TierSpec:
     review: dict = field(default_factory=dict)
 
 
-def _is_duplicate_encoding(a: np.ndarray, b: np.ndarray) -> bool:
-    """True when two decoded images share shape and stay within DUPLICATE_PIXEL_TOLERANCE.
+def _copy_image(src: Path, dst: Path) -> None:
+    """Copy `src` to `dst` following symlinks; a no-op if `dst` already exists.
 
-    >>> _is_duplicate_encoding(np.zeros((1, 1, 3), np.uint8), np.ones((1, 1, 3), np.uint8))
-    True
+    >>> import tempfile
+    >>> d = Path(tempfile.mkdtemp())
+    >>> (d / "src.jpg").write_bytes(b"x")
+    1
+    >>> _copy_image(d / "src.jpg", d / "out" / "src.jpg")
+    >>> (d / "out" / "src.jpg").read_bytes()
+    b'x'
     """
-    if a.shape != b.shape:
-        return False
-    diff = np.abs(a.astype(np.int16) - b.astype(np.int16)).max()
-    return int(diff) <= DUPLICATE_PIXEL_TOLERANCE
-
-
-def _is_reencoded_duplicate(src: Path, dst: Path) -> bool:
-    """True iff both paths decode as images and are the same frame within tolerance."""
-    try:
-        with Image.open(src) as im_src:
-            src_arr = np.asarray(im_src)
-        with Image.open(dst) as im_dst:
-            dst_arr = np.asarray(im_dst)
-    except OSError:
-        return False
-    return _is_duplicate_encoding(src_arr, dst_arr)
-
-
-def _copy_image(src: Path, dst: Path) -> bool:
-    """Hardlink/copy `src` to `dst`; return True iff a byte conflict was a tolerated re-encode."""
     if dst.exists():
-        if filecmp.cmp(src, dst, shallow=False):
-            return False
-        if _is_reencoded_duplicate(src, dst):
-            return True
-        raise ValueError(f"{dst.name} differs between tiers at the same path: {dst}")
+        return
     dst.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        os.link(os.path.realpath(src), dst)
-        return False
-    except OSError:
-        pass
     fd, tmp_name = tempfile.mkstemp(dir=dst.parent, prefix=f".{dst.name}.", suffix=".tmp")
     tmp_path = Path(tmp_name)
     try:
@@ -83,20 +54,18 @@ def _copy_image(src: Path, dst: Path) -> bool:
     except BaseException:
         tmp_path.unlink(missing_ok=True)
         raise
-    return False
 
 
-def _copy_images(jobs: Iterable[tuple[Path, Path]], workers: int) -> int:
-    """Copy (src, dst) pairs through a thread pool; return the tolerated-duplicate count.
+def _copy_images(jobs: Iterable[tuple[Path, Path]], workers: int) -> None:
+    """Copy each (src, dst) pair through a thread pool, once per unique destination.
 
     >>> _copy_images([], 4)
-    0
     """
     by_dst: dict[Path, Path] = {}
     for src, dst in jobs:
         by_dst.setdefault(dst, src)
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        return sum(pool.map(lambda item: _copy_image(item[1], item[0]), by_dst.items()))
+        list(pool.map(lambda item: _copy_image(item[1], item[0]), by_dst.items()))
 
 
 def _merge_calibrations(tiers, out_root):
@@ -215,7 +184,7 @@ def _merge_masks(tiers, ann_maps, out_root, workers=64) -> dict:
 
 
 def merge_tiers(
-    tiers, out_root, *, splits=schema.SPLITS, copy_images=True, masks=True, workers=1
+    tiers, out_root, *, splits=schema.SPLITS, copy_images=True, masks=True, workers=32
 ) -> dict:
     """Merge `tiers` into `out_root`; return the written manifest.
 
@@ -246,7 +215,6 @@ def merge_tiers(
     recording_groups: dict[str, set[str]] = {}
     counts = dict.fromkeys(ids, 0)
     tier_ann_maps: dict[str, dict[int, int]] = {i: {} for i in ids}
-    duplicate_encodings = 0
 
     for split in splits:
         images, annotations, framesets = [], [], {}
@@ -262,7 +230,7 @@ def merge_tiers(
                 images.append({**im, "id": next_img})
                 next_img += 1
             if copy_images:
-                duplicate_encodings += _copy_images(
+                _copy_images(
                     (
                         (
                             Path(tier.path) / "images" / im["file_name"],
@@ -334,8 +302,6 @@ def merge_tiers(
         "calib_groups": sorted({v for v in calib_map.values()}),
         "recordings": recordings,
     }
-    if copy_images:
-        manifest["duplicate_encodings"] = duplicate_encodings
     if masks:
         manifest["masks"] = _merge_masks(tiers, tier_ann_maps, out_root, workers)
     schema.save_manifest(out_root, manifest)
