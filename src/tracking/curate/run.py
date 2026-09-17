@@ -65,7 +65,7 @@ def main(cfg: DictConfig) -> int:
         print(f"[curate] === {name} ===")
         rc = _run_stage(name, cfg)
         if rc:
-            return rc
+            raise SystemExit(rc)
     return 0
 
 
