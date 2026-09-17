@@ -30,3 +30,8 @@ fig_dir:  "${paths.save_dir}/figures"
 # Where input datasets live. Often in-repo (<project_dir>/data); on a cluster
 # you may point this at a shared data location instead.
 data_dir: "${paths.project_dir}/data"
+
+# Curated training root + its optional mask sidecar, and where training runs land.
+train_data_root: "/CHANGEME/path/to/unified_training_root"
+masks_root: "${paths.train_data_root}_masks"
+runs_root: "/CHANGEME/path/to/runs"

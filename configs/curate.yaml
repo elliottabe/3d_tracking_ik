@@ -1,0 +1,17 @@
+# Hydra root for the curation driver.
+#
+#   python -m tracking.curate paths=hyak stages=[merge,validate,package]
+#   python -m tracking.curate paths=hyak stages=[validate] dry_run=true
+defaults:
+  - _self_
+  - paths: hyak
+  - curate: default
+
+stages: [merge, validate, package]
+dry_run: false
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: ${paths.base_dir}/.hydra-logs/curate/${now:%Y-%m-%d}/${now:%H-%M-%S}

@@ -1,0 +1,30 @@
+# @package curate
+out_root: ${paths.train_data_root}
+masks_root: ${paths.masks_root}
+
+# Input tiers, merged in this order. `path` is a root in the documented format.
+tiers:
+  - path: "${paths.data_dir}/red_data/red_data_3d_v12_export0902"
+    source_id: human_v12_0902
+    kind: human
+    weight: 1.0
+  - path: "${paths.data_dir}/red_data_3d_v12_pseudo_p3b_20260905"
+    source_id: pseudo_p3b_0905
+    kind: pseudo
+    weight: 0.3
+  - path: "${paths.data_dir}/red_data_3d_v12_pseudo_negatives_20260905"
+    source_id: negatives_0905
+    kind: negative
+    weight: 1.0
+  - path: "${paths.data_dir}/red_data_3d_v12_pseudo_singlefly_20260905"
+    source_id: singlefly_0905
+    kind: singlefly
+    weight: 0.3
+
+# import_masks
+sam_dir: null
+mask_tool: sam3
+
+# package
+package_tier: all
+package_zip: "${paths.base_dir}/unified_v2_${curate.package_tier}.zip"

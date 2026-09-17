@@ -36,3 +36,8 @@ base_dir: "/gscratch/portia/eabe/data/Johnson_lab/processed"
 # against configs/mvq/*.yaml + configs/centerdetect/*.yaml's own paths --
 # this is just the shared root they happen to live under on this machine).
 ckpt_dir: "/gscratch/portia/eabe/data/Johnson_lab"
+
+# Curated training root + its optional mask sidecar, and where training runs land.
+train_data_root: "${paths.data_dir}/red_data/unified_v2"
+masks_root: "${paths.train_data_root}_masks"
+runs_root: "${paths.data_dir}"
