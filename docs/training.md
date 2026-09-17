@@ -42,6 +42,7 @@ it):
 | --- | --- |
 | `recording` | recording name |
 | `fly_id` | fly identity, `-1` for a negative |
+| `calib_group` | which `calibrations/<group>` this frameset's `frames`/`kp3d` agree with |
 | `frames` | image ids, one per camera in calibration-glob order |
 | `ann_ids` | parallel to `frames`; `null` where a camera did not resolve |
 | `source_id` | key into `manifest.sources` (see below) |
@@ -55,6 +56,12 @@ Rules the format enforces:
 - `manifest.recordings[*].has_masks` is **stale** in the reference export and
   is not read by anything. The mask sidecar's own `index.json` is the
   authoritative record of what has masks.
+- Calibration is a per-frameset property, not a per-recording one. A
+  recording legitimately spans more than one `calib_group` when the rig was
+  recalibrated mid-session; each frameset still fits its own group exactly.
+  `manifest.recordings[rec]` carries `calib_group` when every tier that
+  contributed framesets for `rec` agrees, otherwise `calib_groups` (a sorted
+  list of the distinct groups) and no `calib_group` key.
 
 ## Provenance
 
@@ -160,11 +167,13 @@ not.
 | error | `too_few_cameras` | a frameset resolves fewer than `MIN_CAMS` (3) cameras |
 | error | `negative_without_center3d` | a negative frameset (`fly_id < 0`) carries no `center3D` |
 | error | `unknown_source_id` | a frameset's `source_id` is not in `manifest.sources` |
+| error | `frameset_calib_unresolvable` | a frameset has no `calib_group`, and its recording has neither `calib_group` nor `calib_groups` |
 | error | `manifest_unreadable` | `manifest.json` missing or unparsable |
 | warning | `source_without_checkpoint` | a `pseudo`/`negative`/`singlefly` source records no `checkpoint` |
 | warning | `masks_root_missing` | the given `masks_root` does not exist; copy-paste will be off |
 | info | `zero_annotation_images` | count of images with no annotation |
 | info | `two_fly_fraction` | fraction of images with >= 2 animals -- reported, not failed, so a low fraction (a known bottleneck) is visible before training rather than discovered after |
+| info | `recording_multi_calib` | a recording carries more than one `calib_group` across tiers, e.g. a mid-session recalibration |
 
 ### Packaging tiers
 
