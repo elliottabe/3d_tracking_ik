@@ -23,6 +23,7 @@ when a key is ambiguous.
 from __future__ import annotations
 
 import collections
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -265,6 +266,34 @@ class WindowDataset:
 
     def __len__(self):
         return len(self.windows)
+
+    def worker_spec(self):
+        """Picklable description of this dataset for a loader worker process
+        (`tracking.train.data.loaders`). Built from the ATTRIBUTES, not from
+        a stashed copy of the constructor arguments, so it cannot drift from
+        what the object actually is.
+
+        `recordings` is recovered as the set of recordings that survived the
+        constructor's filter, which selects exactly the same framesets
+        whether the caller passed None or that same set.
+        """
+        from tracking.train.data.loaders import WindowSpec
+
+        return WindowSpec(
+            root=self.root,
+            split=self.split,
+            T=int(self.T),
+            pair_deltas=tuple(self.pair_deltas),
+            max_flies=int(self.max_flies),
+            jitter_units=float(self.jitter),
+            seed=int(self.seed),
+            train=bool(self.train),
+            recordings=tuple(sorted({rec for rec, _frame, _fly in self._fs})),
+            copy_paste=self.copy_paste,
+            center_shift_units=float(self.center_shift),
+            sex_overrides={r: dict(m) for r, m in self.sex_overrides.items()},
+            masks_root=self.masks_root,
+        )
 
     def window_index(self, rec, fly, f0, delta=None):
         """Index of ONE window BY KEY -- never by a position in `windows`.
@@ -675,3 +704,100 @@ class WindowDataset:
                 if out is not None:
                     return out
         return self._build(i)
+
+
+def window_batches(
+    ds,
+    batch_size,
+    *,
+    shuffle=True,
+    seed=0,
+    weights=None,
+    num_workers=8,
+    drop_last=True,
+    workers="threads",
+    pool=None,
+    pool_key=None,
+):
+    """Batches of `batch_size` windows, sampled in the PARENT and assembled by
+    `num_workers` workers.
+
+    `workers`:
+      "threads"   -- a `ThreadPoolExecutor` inside this process. Fine while
+                     the Python half of `__getitem__` is not the bottleneck.
+      "processes" -- a spawn `ProcessSampleLoader`
+                     (`tracking.train.data.loaders`), for when sample
+                     assembly is GIL-bound. Batches are byte-identical to the
+                     thread path for the same (indices, seed) -- the epoch
+                     travels with every task and every per-sample RNG is a
+                     pure function of (dataset seed, index, epoch).
+
+    `pool` is an already-built `ProcessSampleLoader` to reuse (rebuilding one
+    per epoch would re-parse every root's instances json in every worker);
+    when it is None a pool is built on first use and cached on `ds`.
+    `pool_key` picks which dataset inside that pool this call addresses.
+
+    On the thread path, `tpool.shutdown` joins only on a clean drain of
+    `starts`; a consumer that stops mid-epoch releases the threads without
+    blocking, instead of waiting for the abandoned generator to be
+    garbage-collected.
+    """
+    ds.epoch = int(seed)
+    rng = np.random.default_rng(seed)
+    n = len(ds)
+    if weights is not None:
+        w = np.asarray(weights, np.float64)
+        w = w / w.sum()
+        idx = rng.choice(n, size=n, replace=True, p=w)
+    else:
+        idx = rng.permutation(n) if shuffle else np.arange(n)
+    stop = (n // batch_size) * batch_size if drop_last else n
+    starts = range(0, stop, batch_size)
+    if workers == "processes":
+        yield from _process_batches(
+            ds,
+            [[int(i) for i in idx[s : s + batch_size]] for s in starts],
+            seed=int(seed),
+            num_workers=num_workers,
+            pool=pool,
+            pool_key=pool_key,
+        )
+        return
+    if workers != "threads":
+        raise ValueError(f"workers must be 'threads' or 'processes', got {workers!r}")
+    tpool = ThreadPoolExecutor(max_workers=max(1, num_workers))
+    drained = False
+    try:
+        for s in starts:
+            samples = list(tpool.map(ds.__getitem__, [int(i) for i in idx[s : s + batch_size]]))
+            yield {k: np.stack([smp[k] for smp in samples]) for k in WINDOW_KEYS}
+        drained = True
+    finally:
+        tpool.shutdown(wait=drained, cancel_futures=True)
+
+
+def _process_batches(ds, index_lists, *, seed, num_workers, pool, pool_key):
+    """The `workers="processes"` half of `window_batches`."""
+    from tracking.train.data.loaders import ProcessSampleLoader, dataset_spec
+
+    owned = None
+    if pool is None:
+        pool = getattr(ds, "_loader_pool", None)
+        if pool is None or pool.num_workers != max(1, int(num_workers)):
+            if pool is not None:
+                pool.close()
+            pool = ProcessSampleLoader({pool_key: dataset_spec(ds)}, num_workers)
+            try:
+                ds._loader_pool = pool
+            except AttributeError:
+                owned = pool
+    note = getattr(ds, "note_drawn", None)
+    try:
+        for bidx, samples in pool.map_batches(index_lists, epoch=int(seed), key=pool_key):
+            if note is not None:
+                for i in bidx:
+                    note(i)
+            yield {k: np.stack([smp[k] for smp in samples]) for k in WINDOW_KEYS}
+    finally:
+        if owned is not None:
+            owned.close()
