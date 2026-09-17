@@ -18,6 +18,12 @@ read from the frameset THAT BUILT IT (`_win_fs[i]`), never re-derived by
 looking the key back up -- a lookup could silently return the other
 frameset's data. `window_index` raises rather than picking one silently
 when a key is ambiguous.
+
+That holds at T == 1 only. The T > 1 branch walks the DEDUPLICATED `_fs`,
+so a duplicated (recording, frame, fly) yields one window owned by whichever
+frameset `_fs` kept -- on unified_v2 that is the pseudo labelling (weight
+0.3) over the human one (weight 1.0) for all 42 duplicate keys, 0.11% of
+windows. Both labellings are valid, so this is the behaviour, not a bug.
 """
 
 from __future__ import annotations
@@ -456,7 +462,10 @@ class WindowDataset:
         return self._rigs[group]
 
     def _affine(self, group):
-        """(C,2,3) M, (C,2) t (float64) of calib group `group`; raises if it is not affine."""
+        """(C,2,3) M, (C,2) t of calib group `group`; raises if it is not affine.
+
+        Stored as float64, but computed from the rig's float32 matrices.
+        """
         if group not in self._affine_mt:
             M, t = affine_rows(self._rig(group).matrices_f32)
             self._affine_mt[group] = (np.asarray(M, np.float64), np.asarray(t, np.float64))
@@ -527,7 +536,7 @@ class WindowDataset:
             return np.asarray(im.convert("RGB"), np.uint8)
 
     def _build(self, i):
-        """One sample: crops, geometry and labels for window i (Task 5 -- see module docstring)."""
+        """One sample: crops, geometry and labels for window i."""
         rec, host, f0 = self.windows[i]
         negative = host < 0
         rig = self._rig(self.calib_group(i))

@@ -56,15 +56,28 @@ def test_worker_count_does_not_change_the_batch(ds):
 def test_thread_and_process_paths_agree(ds):
     a = next(iter(window_batches(ds, 4, seed=11, num_workers=2, workers="threads")))
     c = next(iter(window_batches(ds, 4, seed=11, num_workers=2, workers="processes")))
-    for k in ("crops", "kp3d_local", "kp2d", "cam_valid", "M"):
-        np.testing.assert_array_equal(a[k], c[k])
+    for k in WINDOW_KEYS:
+        np.testing.assert_array_equal(a[k], c[k], err_msg=k)
 
 
-def test_weights_bias_the_draw(ds):
+def test_weights_bias_the_draw(ds, monkeypatch):
+    n_up = 8
     w = np.zeros(len(ds))
-    w[:8] = 1.0
-    b = next(iter(window_batches(ds, 4, seed=3, weights=w / w.sum(), num_workers=2)))
+    w[:n_up] = 1.0
+    drawn = []
+    real = ds.__getitem__
+
+    def spy(i):
+        drawn.append(int(i))
+        return real(i)
+
+    monkeypatch.setattr(ds, "__getitem__", spy)
+    b = next(
+        iter(window_batches(ds, 4, seed=3, weights=w / w.sum(), num_workers=2, workers="threads"))
+    )
     assert b["crops"].shape[0] == 4
+    assert len(drawn) == 4
+    assert set(drawn) <= set(range(n_up))
 
 
 def test_worker_spec_round_trips_through_pickle(ds):

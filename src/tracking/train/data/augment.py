@@ -242,6 +242,18 @@ def _photometric(sample, params: MVAugParams, rng):
 
 
 def augment_window(sample, params: MVAugParams, rng: np.random.Generator, lr_swap) -> dict:
+    """A new window sample with per-view affine, world rotation, mirror, camera
+    dropout and photometric jitter applied, in that order.
+
+    `sample` is one `WindowDataset.__getitem__` dict; it is not modified.
+    `lr_swap` comes from `build_lr_swap(kp_names)` and must cover every
+    left/right keypoint (`assert_lr_swap_covers`).
+
+    >>> swap = build_lr_swap(ds.kp_order.names)                          # doctest: +SKIP
+    >>> out = augment_window(ds[0], MVAugParams(), rng, swap)            # doctest: +SKIP
+    >>> out["crops"].shape == ds[0]["crops"].shape                       # doctest: +SKIP
+    True
+    """
     if not params.enabled:
         return sample
     lr_swap = np.asarray(lr_swap)
