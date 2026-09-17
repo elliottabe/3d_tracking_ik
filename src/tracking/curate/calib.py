@@ -14,10 +14,7 @@ _ROUND = 6
 
 
 def calib_fingerprint(calib_dir: str | Path) -> str:
-    """16-hex digest of a calibration's rounded coefficients.
-
-    Rounded numerics, not file bytes: the same calibration written with fewer
-    decimal places must fingerprint equal.
+    """16-hex digest of coefficients rounded to 6 decimals; agreeing to 6 fingerprints equal.
 
     >>> calib_fingerprint("calibrations/A")            # doctest: +SKIP
     '3f1a9c2b7d4e5061'
