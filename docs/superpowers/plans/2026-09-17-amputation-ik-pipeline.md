@@ -1956,7 +1956,9 @@ python -m tracking.run recording=amputation ik=amputation \
     recording.id=2026_07_06_16_55_07 run.name=ik_pilot \
     stages=[bouts,ingest3d,preprocess,ik,postprocess,collect] dry_run=true
 ```
-Expected: 11 bouts' worth of work items, `run.root` ending `/processed/amputation/2026_07_06_16_55_07/ik_pilot`, `fit_fly_constants` and `fit_run_floor` inserted automatically, nothing created on disk.
+Expected: **5 work items**, `run.root` ending `/processed/amputation/2026_07_06_16_55_07/ik_pilot`, `fit_fly_constants` and `fit_run_floor` inserted automatically, nothing created on disk.
+
+Only the RECORDING-scoped stages appear. `preprocess`/`ik`/`postprocess` are bout-scoped and expand over `bout_ids`, which `plan.py` resolves at EXECUTION time — a dry run deliberately never reads `bouts.csv`, so it cannot know the bout count yet. Their absence here is correct, not a missing stage.
 
 - [ ] **Step 2: Run it for real**
 
