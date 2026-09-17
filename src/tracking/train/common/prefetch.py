@@ -10,22 +10,18 @@ from tracking.train.common.sharding import shard_batch
 
 
 def prefetch(batch_iter, mesh, depth=2):
-    """Yield device-resident, sharded batches from a numpy batch iterator,
-    buffering up to `depth` ahead on a background thread.
+    """Yield device-resident, sharded batches buffered ahead on a background thread.
 
-    A worker-side exception is re-raised on the consumer side (not silently
-    swallowed). Example: ``for batch in prefetch(iter(batches), mesh):``.
+    Example: ``for batch in prefetch(iter(batches), mesh):``.
+
+    Converts batches with np.asarray (not jnp.asarray, to avoid device-to-device
+    sharding during NCCL collectives) and re-raises worker exceptions on consumer.
     """
     q = queue.Queue(maxsize=depth)
 
     def worker():
         try:
             for batch in batch_iter:
-                # np.asarray, NOT jnp.asarray: a jnp array lands on the default
-                # device first and device_put then shards it DEVICE-TO-DEVICE,
-                # racing the running step's NCCL collectives -- 7 GPUs spin at
-                # 100 % waiting for the 8th. From host memory every shard is a
-                # plain host-to-device copy, which cannot deadlock with a collective.
                 dev = jax.tree.map(lambda a: shard_batch(np.asarray(a), mesh), batch)
                 q.put(("ok", dev))
         except Exception as e:
