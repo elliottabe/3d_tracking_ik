@@ -32,10 +32,23 @@ def test_amputation_recording_is_rigless_and_single_fly():
 
 
 def test_amputation_recording_id_override_flows_into_every_path():
-    cfg = _compose("recording=amputation", "recording.id=2026_07_09_10_22_32")
+    # SINGLE-QUOTED, exactly as scripts/slurm/amputation_array.sh emits it.
+    cfg = _compose("recording=amputation", "recording.id='2026_07_09_10_22_32'")
     assert cfg.recording.name == "2026_07_09_10_22_32"
     assert cfg.recording.bouts_csv.endswith("/2026_07_09_10_22_32/running_bouts_summary.csv")
     assert cfg.recording.kp3d_csv.endswith("/2026_07_09_10_22_32/data3D.csv")
+
+
+def test_unquoted_recording_id_is_mangled_into_an_int():
+    """The trap the slurm script quotes around, pinned as a regression test.
+
+    Hydra's override grammar reads an all-digits-and-underscores value as a
+    Python int literal and drops every underscore, so an unquoted id silently
+    becomes a recording that never existed.
+    """
+    cfg = _compose("recording=amputation", "recording.id=2026_07_09_10_22_32")
+    assert cfg.recording.id == 20260709102232
+    assert not str(cfg.recording.kp3d_csv).endswith("/2026_07_09_10_22_32/data3D.csv")
 
 
 def test_ik_amputation_inherits_per_frame_and_adds_freeze():
