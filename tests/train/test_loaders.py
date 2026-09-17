@@ -72,3 +72,13 @@ def test_worker_spec_round_trips_through_pickle(ds):
 
     spec = ds.worker_spec()
     assert pickle.loads(pickle.dumps(spec)) == spec
+
+
+def test_worker_spec_refuses_a_subclass(ds):
+    class Subclass(WindowDataset):
+        pass
+
+    sub = Subclass.__new__(Subclass)
+    sub.__dict__.update(ds.__dict__)
+    with pytest.raises(TypeError, match="build_dataset"):
+        sub.worker_spec()

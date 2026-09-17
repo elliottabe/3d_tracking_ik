@@ -276,7 +276,18 @@ class WindowDataset:
         `recordings` is recovered as the set of recordings that survived the
         constructor's filter, which selects exactly the same framesets
         whether the caller passed None or that same set.
+
+        Refused for a subclass: the spec carries no class, so
+        `loaders.build_dataset` would rebuild a plain `WindowDataset` and the
+        subclass's `__getitem__` would silently not run in the worker.
         """
+        if type(self) is not WindowDataset:
+            raise TypeError(
+                f"{type(self).__name__} subclasses WindowDataset, but a WindowSpec carries "
+                f"no class: tracking.train.data.loaders.build_dataset would rebuild a plain "
+                f"WindowDataset in each worker and {type(self).__name__}'s overrides would "
+                f"never run. Use workers='threads', or teach build_dataset about the subclass."
+            )
         from tracking.train.data.loaders import WindowSpec
 
         return WindowSpec(
