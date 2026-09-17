@@ -116,7 +116,7 @@ def _image_stem(rel: str | Path) -> str:
 
 
 def _merge_mask_group(
-    dst: Path, sources: list[tuple[Path, dict, str]]
+    dst: Path, sources: list[tuple[Path, dict, str | None]]
 ) -> tuple[int, int, int, bool]:
     """Fold one destination's per-tier npz sources in order; return counts and whether it wrote.
 
@@ -257,10 +257,13 @@ def merge_tiers(
                 img_map[im["id"]] = next_img
                 images.append({**im, "id": next_img})
                 next_img += 1
-                stem = _image_stem(im["file_name"])
+                name = im.get("file_name")
+                if name is None:
+                    continue
+                stem = _image_stem(name)
                 if owner.setdefault(stem, split) != split:
                     raise ValueError(
-                        f"tier {tier.source_id!r} image {im['file_name']!r} is in both the "
+                        f"tier {tier.source_id!r} image {name!r} is in both the "
                         f"{owner[stem]!r} and {split!r} split files; its mask rows cannot "
                         f"be resolved to one annotation id space"
                     )
