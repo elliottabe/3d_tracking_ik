@@ -1673,6 +1673,26 @@ def test_recording_without_a_bout_table_is_skipped_by_name(tmp_path):
     assert manifest.read_text().split() == ["2026_07_06_16_55_07"]
 
 
+def test_requeue_flag_comes_from_the_slurm_profile(tmp_path):
+    root = _data_root(tmp_path, ["2026_07_06_16_55_07"])
+    ckpt = _run("--dry-run", "--run-name", "ik_v1", "--data-root", str(root),
+                "--manifest-dir", str(tmp_path), "--slurm", "ckpt_all")
+    assert ckpt.returncode == 0, ckpt.stderr
+    assert "--requeue" in ckpt.stdout
+
+    l40s = _run("--dry-run", "--run-name", "ik_v1", "--data-root", str(root),
+                "--manifest-dir", str(tmp_path), "--slurm", "gpu_l40s")
+    assert l40s.returncode == 0, l40s.stderr
+    assert "--requeue" not in l40s.stdout
+
+
+def test_missing_data_root_is_named_distinctly(tmp_path):
+    out = _run("--dry-run", "--run-name", "ik_v1",
+               "--data-root", str(tmp_path / "nope"), "--manifest-dir", str(tmp_path))
+    assert out.returncode != 0
+    assert "--data-root does not exist" in out.stderr
+
+
 def test_run_name_is_required(tmp_path):
     root = _data_root(tmp_path, ["2026_07_06_16_55_07"])
     out = _run("--dry-run", "--data-root", str(root))
@@ -1760,6 +1780,13 @@ done
 Continue the script with the discovery, manifest, and submission:
 
 ```bash
+# A missing data root is a different operator error from an empty one, and the
+# generic "no usable recording" refusal below would hide which it was.
+[ -d "$DATA_ROOT" ] || {
+    echo "refusing: --data-root does not exist: $DATA_ROOT" >&2
+    exit 2
+}
+
 # -- Discovery. A recording is usable only if it has BOTH the 3D table and a
 #    bout table with at least one data row. A skip is always named on stderr:
 #    "N tasks submitted" vs "103 directories exist" is exactly the discrepancy
@@ -1797,6 +1824,11 @@ fi
 
 # -- Freeze the list. Tasks index THIS file, never a fresh glob.
 mkdir -p "$MANIFEST_DIR"
+# ABSOLUTE, always: the job body does `cd "$REPO"` before reading the manifest,
+# so a relative --manifest-dir would resolve against $REPO on the compute node
+# and silently find nothing -- defeating the one guarantee this script exists
+# to provide.
+MANIFEST_DIR="$(cd "$MANIFEST_DIR" && pwd)"
 MANIFEST="$MANIFEST_DIR/amputation_$(date +%Y%m%d-%H%M%S).manifest"
 printf '%s\n' "$USABLE" > "$MANIFEST"
 
@@ -1817,6 +1849,11 @@ RESOURCE_FLAGS=(
 [ -n "$(_y gres)" ]       && RESOURCE_FLAGS+=("--gres=$(_y gres)")
 [ -n "$(_y constraint)" ] && RESOURCE_FLAGS+=("--constraint=$(_y constraint)")
 [ -n "$(_y exclude)" ]    && RESOURCE_FLAGS+=("--exclude=$(_y exclude)")
+# ckpt-all is preemptible and its profile sets `requeue: true`; without this a
+# preempted array task is simply lost. session_pipeline.sh does the same
+# (`if slurm_cfg.get("requeue")`). Compared against "true" rather than tested
+# for non-emptiness so that `requeue: false` does NOT add the flag.
+[ "$(_y requeue)" = "true" ] && RESOURCE_FLAGS+=("--requeue")
 
 # -- VERIFIED FACT 1, copied from session_pipeline.sh: `module load cuda` alone
 #    measurably leaves JAX on cpu on this cluster; the env's own bundled wheels
@@ -1873,7 +1910,7 @@ Note `--array=0-$((N-1))%$CONCURRENCY` uses the manifest's own line count, so th
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/slurm/test_amputation_array.py -v`
-Expected: 5 passed.
+Expected: 7 passed.
 
 - [ ] **Step 5: Dry-run against the real cohort**
 
