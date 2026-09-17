@@ -1,10 +1,11 @@
+import dataclasses
 import os
 
 import numpy as np
 import pytest
 
 from tracking.train.data.copypaste import CopyPasteParams
-from tracking.train.data.windows import WindowDataset
+from tracking.train.data.windows import WINDOW_KEYS, WindowDataset
 
 ROOT = "/gscratch/portia/eabe/data/Johnson_lab/red_data/unified_v2"
 MASKS = ROOT + "_masks"
@@ -79,3 +80,59 @@ def test_paste_window_adds_a_second_valid_fly(small_ds):
         for k in ("crops", "kp2d", "vis2d", "donor_mask"):
             assert out[k].shape == small_ds[i][k].shape
     assert hits > 0
+
+
+def _same_sample(a, b):
+    return all(np.array_equal(a[k], b[k]) for k in WINDOW_KEYS)
+
+
+def test_getitem_without_copy_paste_matches_build(small_ds):
+    saved = small_ds.copy_paste
+    small_ds.copy_paste = None
+    try:
+        i = next(i for i in range(len(small_ds)) if not small_ds.is_negative(i))
+        assert _same_sample(small_ds[i], small_ds._build(i))
+    finally:
+        small_ds.copy_paste = saved
+
+
+def test_getitem_p_zero_never_pastes(small_ds):
+    saved = small_ds.copy_paste
+    small_ds.copy_paste = dataclasses.replace(saved, p=0.0)
+    try:
+        for i in range(min(len(small_ds), 6)):
+            assert _same_sample(small_ds[i], small_ds._build(i))
+    finally:
+        small_ds.copy_paste = saved
+
+
+def test_getitem_p_one_pastes_on_an_eligible_window(small_ds):
+    elig = [
+        i for i in range(len(small_ds)) if not small_ds.is_negative(i) and small_ds.n_flies(i) == 1
+    ]
+    assert any(not _same_sample(small_ds[i], small_ds._build(i)) for i in elig[:6])
+
+
+def test_getitem_never_pastes_a_negative(multi_group_ds):
+    i = next(i for i in range(len(multi_group_ds)) if multi_group_ds.is_negative(i))
+    assert _same_sample(multi_group_ds[i], multi_group_ds._build(i))
+
+
+def test_getitem_eval_mode_never_pastes(small_ds):
+    saved = small_ds.train
+    small_ds.train = False
+    try:
+        for i in range(min(len(small_ds), 6)):
+            assert _same_sample(small_ds[i], small_ds._build(i))
+    finally:
+        small_ds.train = saved
+
+
+def test_getitem_draw_is_deterministic_given_the_same_seed():
+    kwargs = dict(
+        recordings=[SMALL_REC], masks_root=MASKS, copy_paste=CopyPasteParams(p=1.0, max_tries=4)
+    )
+    ds1 = WindowDataset(ROOT, "train", T=1, seed=0, **kwargs)
+    ds2 = WindowDataset(ROOT, "train", T=1, seed=0, **kwargs)
+    i = next(i for i in range(len(ds1)) if not ds1.is_negative(i) and ds1.n_flies(i) == 1)
+    assert _same_sample(ds1[i], ds2[i])

@@ -650,5 +650,28 @@ class WindowDataset:
         return None
 
     def __getitem__(self, i):
-        """One training sample (`WINDOW_KEYS`) for window i; see `_build`."""
+        """One training sample (`WINDOW_KEYS`) for window i.
+
+        Draws a copy-paste sample with probability `copy_paste.p` when
+        training, window i has exactly one labelled fly (so a negative,
+        which has zero, is structurally excluded), and it has no
+        unlabelled animal; every other case, and a `paste_window` that
+        rejects every donor, falls through to `_build(i)`. The RNG seed's
+        trailing `7` separates this draw from `_build`'s own jitter draw
+        (same `seed`/`i`/`epoch`) so the two do not correlate.
+        """
+        p = self.copy_paste
+        if (
+            p is not None
+            and self.train
+            and self.n_flies(i) == 1
+            and self.unlabelled_sex(i) == SEX_UNKNOWN
+        ):
+            rng = np.random.default_rng(
+                np.random.SeedSequence([self.seed, int(i), int(self.epoch), 7])
+            )
+            if rng.uniform() < p.p:
+                out = self.paste_window(i, rng)
+                if out is not None:
+                    return out
         return self._build(i)
