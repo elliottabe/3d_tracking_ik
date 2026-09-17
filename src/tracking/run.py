@@ -48,11 +48,25 @@ def _discover_bout_ids(run_root: Path) -> list[int]:
 
 
 def _load_anatomy(cfg: DictConfig):
-    """`inverse_kinematics.anatomy.load_anatomy`, fed a DETACHED anatomy cfg."""
+    """`load_anatomy`, intersected with what this recording actually tracked.
+
+    A recording that names a `kp3d_csv` carries its own keypoint set, which may
+    be a subset of the anatomy's (an amputated fly has no markers distal to the
+    amputation). Deriving the set from the file's own header means it cannot
+    drift from the data. Every other recording takes the unchanged strict path.
+    """
     from tracking.inverse_kinematics.anatomy import load_anatomy
 
     detached = OmegaConf.create(OmegaConf.to_container(cfg.anatomy, resolve=False))
-    return load_anatomy(detached)
+    kp3d_csv = cfg.recording.get("kp3d_csv", None)
+    if kp3d_csv is None:
+        return load_anatomy(detached)
+
+    from tracking.io.kp3d_csv import read_kp3d_header
+
+    return load_anatomy(
+        detached, tracked_kp_names=read_kp3d_header(kp3d_csv), strict=False
+    )
 
 
 def _recording_spec(cfg: DictConfig):
