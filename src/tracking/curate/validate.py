@@ -73,11 +73,30 @@ def _check_split(root, split, kp_order, sources, out):
     missing_keys = [k for k in ("images", "annotations", "framesets") if k not in coco]
     if missing_keys:
         out.append(_err("split_missing_keys", f"{split}: missing key(s) {missing_keys}"))
-    images = {i["id"]: i for i in coco.get("images", [])}
-    anns = {a["id"]: a for a in coco.get("annotations", [])}
     n_kp = len(kp_order) if kp_order is not None else None
 
-    for a in coco.get("annotations", []):
+    raw_images = coco.get("images", [])
+    good_images = [i for i in raw_images if "id" in i and "file_name" in i]
+    if len(good_images) != len(raw_images):
+        out.append(
+            _err(
+                "malformed_row",
+                f"{split}: {len(raw_images) - len(good_images)} image row(s) missing id/file_name",
+            )
+        )
+    raw_anns = coco.get("annotations", [])
+    good_anns = [a for a in raw_anns if "id" in a]
+    if len(good_anns) != len(raw_anns):
+        out.append(
+            _err(
+                "malformed_row",
+                f"{split}: {len(raw_anns) - len(good_anns)} annotation row(s) missing id",
+            )
+        )
+    images = {i["id"]: i for i in good_images}
+    anns = {a["id"]: a for a in good_anns}
+
+    for a in good_anns:
         if n_kp is not None and len(a.get("keypoints", [])) != 3 * n_kp:
             out.append(
                 _err(
@@ -88,19 +107,47 @@ def _check_split(root, split, kp_order, sources, out):
             )
             break
 
-    for rel, img_id in ((i["file_name"], i["id"]) for i in coco.get("images", [])):
+    n_symlink, first_symlink = 0, None
+    for rel, img_id in ((i["file_name"], i["id"]) for i in good_images):
         p = Path(root) / "images" / rel
         if p.is_symlink():
-            out.append(_err("image_is_symlink", f"{split} image {img_id}: {rel} is a symlink"))
-            break
+            n_symlink += 1
+            first_symlink = first_symlink or (rel, img_id)
+    if n_symlink:
+        rel, img_id = first_symlink
+        out.append(
+            _err(
+                "image_is_symlink",
+                f"{split} image {img_id}: {rel} is a symlink (first offender, {n_symlink} total)",
+            )
+        )
 
-    for rel, img_id in ((i["file_name"], i["id"]) for i in coco.get("images", [])):
+    n_missing, first_missing = 0, None
+    for rel, img_id in ((i["file_name"], i["id"]) for i in good_images):
         p = Path(root) / "images" / rel
         if not p.is_symlink() and not p.exists():
-            out.append(_err("image_missing", f"{split} image {img_id}: {rel} not on disk"))
-            break
+            n_missing += 1
+            first_missing = first_missing or (rel, img_id)
+    if n_missing:
+        rel, img_id = first_missing
+        out.append(
+            _err(
+                "image_missing",
+                f"{split} image {img_id}: {rel} not on disk (first offender, {n_missing} total)",
+            )
+        )
 
-    for key, fs in coco.get("framesets", {}).items():
+    framesets = coco.get("framesets", {})
+    if not isinstance(framesets, dict):
+        out.append(
+            _err(
+                "malformed_row",
+                f"{split}: framesets is a {type(framesets).__name__}, expected a mapping",
+            )
+        )
+        framesets = {}
+
+    for key, fs in framesets.items():
         frames, ann_ids = fs.get("frames", []), fs.get("ann_ids", [])
         if len(frames) != len(ann_ids):
             out.append(
@@ -127,7 +174,7 @@ def _check_split(root, split, kp_order, sources, out):
         if sid is not None and sid not in sources:
             out.append(_err("unknown_source_id", f"{key}: source_id {sid!r} not in manifest"))
 
-    per_image = Counter(a["image_id"] for a in coco.get("annotations", []))
+    per_image = Counter(a["image_id"] for a in good_anns if "image_id" in a)
     n_zero = max(0, len(images) - len(per_image))
     n_two = sum(1 for v in per_image.values() if v >= 2)
     if n_zero:
@@ -161,7 +208,11 @@ def validate_root(root: str | Path, *, masks_root: str | Path | None = None) -> 
     except (OSError, json.JSONDecodeError) as exc:
         out.append(_err("manifest_unreadable", str(exc)))
         return out
-    srcs = schema.sources(manifest)
+    try:
+        srcs = schema.sources(manifest)
+    except (KeyError, ValueError) as exc:
+        out.append(_err("manifest_sources_invalid", str(exc)))
+        srcs = {}
     for sid, entry in srcs.items():
         if entry.kind in ("pseudo", "negative", "singlefly") and not entry.checkpoint:
             out.append(

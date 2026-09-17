@@ -176,3 +176,70 @@ def test_split_missing_all_structural_keys_names_them_all(make_tier):
 def test_empty_but_present_split_keys_are_not_missing_keys(make_tier):
     root = make_tier("t")
     assert "split_missing_keys" not in codes(validate.validate_root(root), "error")
+
+
+def test_image_row_missing_file_name_does_not_crash(make_tier):
+    root = make_tier("t")
+    coco = json.loads((root / "annotations" / "instances_train.json").read_text())
+    del coco["images"][0]["file_name"]
+    (root / "annotations" / "instances_train.json").write_text(json.dumps(coco))
+    findings = validate.validate_root(root)
+    assert "malformed_row" in codes(findings, "error")
+
+
+def test_image_row_missing_id_does_not_crash(make_tier):
+    root = make_tier("t")
+    coco = json.loads((root / "annotations" / "instances_train.json").read_text())
+    del coco["images"][0]["id"]
+    (root / "annotations" / "instances_train.json").write_text(json.dumps(coco))
+    findings = validate.validate_root(root)
+    assert "malformed_row" in codes(findings, "error")
+
+
+def test_annotation_row_missing_id_does_not_crash(make_tier):
+    root = make_tier("t")
+    coco = json.loads((root / "annotations" / "instances_train.json").read_text())
+    del coco["annotations"][0]["id"]
+    (root / "annotations" / "instances_train.json").write_text(json.dumps(coco))
+    findings = validate.validate_root(root)
+    assert "malformed_row" in codes(findings, "error")
+
+
+def test_framesets_as_list_does_not_crash(make_tier):
+    root = make_tier("t")
+    coco = json.loads((root / "annotations" / "instances_train.json").read_text())
+    coco["framesets"] = list(coco["framesets"].values())
+    (root / "annotations" / "instances_train.json").write_text(json.dumps(coco))
+    findings = validate.validate_root(root)
+    assert "malformed_row" in codes(findings, "error")
+
+
+def test_manifest_source_with_bad_kind_does_not_crash(make_tier):
+    root = make_tier("t")
+    man = json.loads((root / "manifest.json").read_text())
+    man["sources"] = {"x": {"kind": "pseudolabel"}}
+    (root / "manifest.json").write_text(json.dumps(man))
+    findings = validate.validate_root(root)
+    assert "manifest_sources_invalid" in codes(findings, "error")
+
+
+def test_manifest_source_missing_kind_does_not_crash(make_tier):
+    root = make_tier("t")
+    man = json.loads((root / "manifest.json").read_text())
+    man["sources"] = {"x": {}}
+    (root / "manifest.json").write_text(json.dumps(man))
+    findings = validate.validate_root(root)
+    assert "manifest_sources_invalid" in codes(findings, "error")
+
+
+def test_symlink_offender_count_is_reported(make_tier, tmp_path):
+    root = make_tier("t", n_frames=2)
+    coco = json.loads((root / "annotations" / "instances_train.json").read_text())
+    for im in coco["images"][:2]:
+        rel = im["file_name"]
+        target = tmp_path / f"elsewhere_{im['id']}.jpg"
+        (root / "images" / rel).rename(target)
+        (root / "images" / rel).symlink_to(target)
+    findings = [f for f in validate.validate_root(root) if f.code == "image_is_symlink"]
+    assert len(findings) == 1
+    assert "2 total" in findings[0].message
