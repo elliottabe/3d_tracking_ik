@@ -1407,7 +1407,6 @@ EOF
 - Modify: `src/tracking/run.py` (`_context`, ~line 358)
 - Modify: `src/tracking/pipeline/bout_stages.py` (`postprocess_bout_fly`, ~line 292)
 - Modify: `src/tracking/qc/bout.py` (`bout_qc`, line 22)
-- Modify: `src/tracking/pipeline/stages.py` (`postprocess` `reads`)
 - Test: `tests/qc/test_bout_qc_rigless.py`
 
 **Interfaces:**
@@ -1535,11 +1534,14 @@ def bout_qc(
     if rig is None:
         resid = np.full(fitted_world.shape[0], np.nan)
     else:
+        # Call order matches the pre-refactor version exactly: ik_reproj_report,
+        # then per_frame_reproj, then loo_report. A swap changes which exception
+        # a malformed rig surfaces first.
         report["reproj"] = ik_reproj_report(
             kp2d, conf2d, fitted_world, kp3d_raw, rig, conf_thresh=conf_thresh
         )
-        report["loo"] = loo_report(kp2d, conf2d, rig, conf_thresh=conf_thresh)
         resid = per_frame_reproj(kp2d, conf2d, fitted_world, rig, conf_thresh=conf_thresh)
+        report["loo"] = loo_report(kp2d, conf2d, rig, conf_thresh=conf_thresh)
 
     report["invariants"] = inv
     report["coverage"] = coverage_report(kp3d_raw, conf3d, kp_order, conf_thresh=conf_thresh)
@@ -1567,7 +1569,9 @@ In `src/tracking/run.py`, `_context`:
         ctx["rig"] = _rig(spec) if spec.has_rig else None
 ```
 
-In `src/tracking/pipeline/stages.py`, change `postprocess`'s `reads` to `("stac_ik.h5", "floor.json")` — `kp2d.npz` is read only when the recording has a rig, and `reads` is documentation that should be true.
+**Leave `src/tracking/pipeline/stages.py`'s `postprocess` `reads` tuple ALONE.** It stays `("stac_ik.h5", "kp2d.npz", "floor.json")`.
+
+`reads` is NOT documentation: `slurm/graph.py::_depends_on` consumes it against `Stage.writes` to build real `--dependency=afterok:` edges. Trimming `kp2d.npz` deletes the `postprocess -> fine` edge for every rigged campaign. It is over-declaration — `reads` is the stage's maximal read set, and the conditional load is a runtime property. One redundant edge is harmless; a missing edge is a race.
 
 - [ ] **Step 4: Run tests to verify they pass**
 

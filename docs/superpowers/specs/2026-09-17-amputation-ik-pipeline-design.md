@@ -294,9 +294,19 @@ check exists to prevent. `Order([])` is legal.
 Omitting rather than writing `"reproj": null` is deliberate: a null claims
 the check ran and found nothing, where absence says it never ran.
 
-**`stages.py`** — `postprocess`'s `reads` tuple drops its unconditional
-`kp2d.npz` claim. Cosmetic (`reads` is never enforced), but the registry's
-job is to be true.
+**`stages.py`** — `postprocess`'s `reads` tuple is left ALONE.
+
+An earlier draft of this design trimmed `kp2d.npz` from it, on the claim that
+`reads` is documentation and never enforced. **That claim was wrong.**
+`slurm/graph.py::_depends_on` consumes `Stage.reads` against `Stage.writes`
+to build real `--dependency=afterok:` edges, so trimming it deletes the
+`postprocess -> fine` edge for every rigged campaign. Transitivity happens to
+keep the ordering correct today (`postprocess -> ik -> preprocess -> fine`),
+but that is an unstated property of the graph's shape, not a checked one.
+
+`reads` is therefore the stage's MAXIMAL read set. Over-declaring costs one
+redundant edge; under-declaring is a race. The `kp2d.npz` read being
+conditional at runtime is a property of the code, not of the registry.
 
 ### 4.4 Freezing the T1L DOFs
 
