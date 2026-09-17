@@ -193,6 +193,17 @@ def _check_split(root, split, kp_order, sources, out):
             )
         )
 
+    dupes = {name: n for name, n in Counter(i["file_name"] for i in good_images).items() if n > 1}
+    if dupes:
+        out.append(
+            Finding(
+                "warning",
+                "duplicate_file_name",
+                f"{split}: {len(dupes)} file_name(s) shared by multiple image rows, e.g. "
+                f"{next(iter(dupes))!r} x{dupes[next(iter(dupes))]}",
+            )
+        )
+
 
 def validate_root(root: str | Path, *, masks_root: str | Path | None = None) -> list[Finding]:
     """Every check from the format spec, as a flat finding list.
@@ -202,12 +213,16 @@ def validate_root(root: str | Path, *, masks_root: str | Path | None = None) -> 
     """
     out: list[Finding] = []
     kp_order = _check_keypoints(root, out)
-    _check_calibrations(root, out)
+    names_seen = _check_calibrations(root, out)
     try:
         manifest = schema.load_manifest(root)
     except (OSError, json.JSONDecodeError) as exc:
         out.append(_err("manifest_unreadable", str(exc)))
         return out
+    referenced = set(manifest.get("calib_groups", []))
+    referenced |= {r.get("calib_group") for r in manifest.get("recordings", {}).values()}
+    for group in sorted(referenced - names_seen.keys() - {None}):
+        out.append(_err("calib_group_missing", f"calib_group {group!r} has no calibrations/ dir"))
     try:
         srcs = schema.sources(manifest)
     except (KeyError, ValueError) as exc:

@@ -232,6 +232,23 @@ def test_manifest_source_missing_kind_does_not_crash(make_tier):
     assert "manifest_sources_invalid" in codes(findings, "error")
 
 
+def test_calib_group_missing_from_disk_is_an_error(make_tier):
+    root = make_tier("t")
+    man = json.loads((root / "manifest.json").read_text())
+    man["recordings"]["rec1"]["calib_group"] = "B"
+    man["calib_groups"] = ["A", "B"]
+    (root / "manifest.json").write_text(json.dumps(man))
+    assert "calib_group_missing" in codes(validate.validate_root(root), "error")
+
+
+def test_duplicate_file_name_across_images_is_a_warning(make_tier):
+    root = make_tier("t")
+    coco = json.loads((root / "annotations" / "instances_train.json").read_text())
+    coco["images"][1]["file_name"] = coco["images"][0]["file_name"]
+    (root / "annotations" / "instances_train.json").write_text(json.dumps(coco))
+    assert "duplicate_file_name" in codes(validate.validate_root(root), "warning")
+
+
 def test_symlink_offender_count_is_reported(make_tier, tmp_path):
     root = make_tier("t", n_frames=2)
     coco = json.loads((root / "annotations" / "instances_train.json").read_text())
