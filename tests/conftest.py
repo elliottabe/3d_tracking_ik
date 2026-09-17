@@ -56,6 +56,8 @@ def make_tier(tmp_path, make_calib_dir):
 
     Ids are unique across the tier's two split files, as a real tier's are:
     `instances_val.json` continues the numbering `instances_train.json` ends on.
+    `restart_val_ids=True` makes each split file number from 1 instead, the
+    shape that makes an old annotation id ambiguous outside its split.
 
     >>> root = make_tier("human", n_frames=2, val_frames=1)        # doctest: +SKIP
     >>> (root / "annotations" / "instances_train.json").exists()   # doctest: +SKIP
@@ -73,6 +75,7 @@ def make_tier(tmp_path, make_calib_dir):
         val_frames=1,
         first_frame=100,
         val_first_frame=200,
+        restart_val_ids=False,
     ):
         root = tmp_path / name
         (root / "annotations").mkdir(parents=True)
@@ -140,6 +143,8 @@ def make_tier(tmp_path, make_calib_dir):
             return coco, img_id, ann_id
 
         train, img_id, ann_id = split_coco(range(first_frame, first_frame + n_frames), 1, 1)
+        if restart_val_ids:
+            img_id = ann_id = 1
         val, _, _ = split_coco(range(val_first_frame, val_first_frame + val_frames), img_id, ann_id)
         (root / "annotations" / "instances_train.json").write_text(json.dumps(train))
         (root / "annotations" / "instances_val.json").write_text(json.dumps(val))

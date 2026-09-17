@@ -106,22 +106,37 @@ def _preflight_calib_groups(tiers, calib_map):
     return resolved
 
 
-def _merge_mask_group(dst: Path, sources: list[tuple[Path, dict]]) -> tuple[int, int, int, bool]:
+def _image_stem(rel: str | Path) -> str:
+    """A frame's identity across file types: its relative path without the suffix.
+
+    >>> _image_stem("rec/Cam01/Frame_7.jpg"), _image_stem(Path("rec/Cam01/Frame_7.npz"))
+    ('rec/Cam01/Frame_7', 'rec/Cam01/Frame_7')
+    """
+    return str(Path(rel).with_suffix(""))
+
+
+def _merge_mask_group(
+    dst: Path, sources: list[tuple[Path, dict, str]]
+) -> tuple[int, int, int, bool]:
     """Fold one destination's per-tier npz sources in order; return counts and whether it wrote.
+
+    Each source is (npz, the tier's {(split, old id): new id} map, the split its
+    frame belongs to). A frame in none of the tier's split files carries
+    `split=None`, which drops every row.
 
     >>> _merge_mask_group(Path("x"), [])
     (0, 0, 0, False)
     """
     rows_remapped = rows_dropped = collisions = 0
     merged_ids = merged_masks = merged_matched = None
-    for p, ann_map in sources:
+    for p, ann_map, split in sources:
         with np.load(p) as z:
             old_ids = z["ann_ids"]
-            keep = np.array([int(a) in ann_map for a in old_ids], dtype=bool)
+            keep = np.array([(split, int(a)) in ann_map for a in old_ids], dtype=bool)
             rows_dropped += int((~keep).sum())
             if not keep.any():
                 continue
-            new_ids = np.array([ann_map[int(a)] for a in old_ids[keep]], dtype=np.int64)
+            new_ids = np.array([ann_map[(split, int(a))] for a in old_ids[keep]], dtype=np.int64)
             kept_masks = z["masks"][keep]
             kept_matched = (
                 z["matched"][keep] if "matched" in z.files else np.ones(len(new_ids), bool)
@@ -141,19 +156,24 @@ def _merge_mask_group(dst: Path, sources: list[tuple[Path, dict]]) -> tuple[int,
     return rows_remapped, rows_dropped, collisions, True
 
 
-def _merge_masks(tiers, ann_maps, out_root, workers=64) -> dict:
+def _merge_masks(tiers, ann_maps, img_splits, out_root, workers=64) -> dict:
     """Remap each tier's mask sidecar into `out_root`'s id space, merging on path collision.
 
-    >>> _merge_masks([], {}, "unified", 4)
+    A mask file's annotation ids mean whatever the split of its own frame says
+    they mean, so each file is resolved through `img_splits[tier][stem]` -- the
+    split that owns `<recording>/<camera>/Frame_<n>` in that tier.
+
+    >>> _merge_masks([], {}, {}, "unified", 4)
     {'files_written': 0, 'rows_remapped': 0, 'rows_dropped': 0, 'collisions_merged': 0}
     """
     dst_store = MaskStore(sidecar_path(out_root))
-    groups: dict[Path, list[tuple[Path, dict]]] = {}
+    groups: dict[Path, list[tuple[Path, dict, str]]] = {}
     for tier in tiers:
         src_dir = Path(tier.path) / "masks"
         if not src_dir.is_dir():
             continue
         ann_map = ann_maps[tier.source_id]
+        splits = img_splits[tier.source_id]
         for p in sorted(src_dir.rglob("Frame_*.npz")):
             rel = p.relative_to(src_dir)
             if len(rel.parts) != 3:
@@ -161,7 +181,7 @@ def _merge_masks(tiers, ann_maps, out_root, workers=64) -> dict:
             recording, camera, fname = rel.parts
             frame = int(fname.removeprefix("Frame_").removesuffix(".npz"))
             dst = dst_store.path(recording, camera, frame)
-            groups.setdefault(dst, []).append((p, ann_map))
+            groups.setdefault(dst, []).append((p, ann_map, splits.get(_image_stem(rel))))
 
     stats = {"files_written": 0, "rows_remapped": 0, "rows_dropped": 0, "collisions_merged": 0}
     if workers == 1:
@@ -189,7 +209,10 @@ def merge_tiers(
     """Merge `tiers` into `out_root`; return the written manifest.
 
     Image and annotation ids are unique across the root, not just within one
-    split file -- the mask sidecar keys rows by annotation id alone.
+    split file -- the mask sidecar keys rows by annotation id alone. A tier's
+    own ids are only unique within its split file, so a mask row is remapped
+    through the (split, old id) its own frame belongs to; an image that appears
+    in two of a tier's split files raises.
 
     >>> merge_tiers([TierSpec("human_root", "human_v12", "human")], "unified")  # doctest: +SKIP
     {'version': 'unified', 'sources': {...}, ...}
@@ -217,7 +240,8 @@ def merge_tiers(
     sources: dict[str, dict] = {}
     recording_groups: dict[str, set[str]] = {}
     counts = dict.fromkeys(ids, 0)
-    tier_ann_maps: dict[str, dict[int, int]] = {i: {} for i in ids}
+    tier_ann_maps: dict[str, dict[tuple[str, int], int]] = {i: {} for i in ids}
+    tier_img_splits: dict[str, dict[str, str]] = {i: {} for i in ids}
 
     next_img = next_ann = 1
     for split in splits:
@@ -228,10 +252,18 @@ def merge_tiers(
             except FileNotFoundError:
                 continue
             img_map, ann_map = {}, {}
+            owner = tier_img_splits[tier.source_id]
             for im in coco["images"]:
                 img_map[im["id"]] = next_img
                 images.append({**im, "id": next_img})
                 next_img += 1
+                stem = _image_stem(im["file_name"])
+                if owner.setdefault(stem, split) != split:
+                    raise ValueError(
+                        f"tier {tier.source_id!r} image {im['file_name']!r} is in both the "
+                        f"{owner[stem]!r} and {split!r} split files; its mask rows cannot "
+                        f"be resolved to one annotation id space"
+                    )
             if copy_images:
                 _copy_images(
                     (
@@ -267,7 +299,9 @@ def merge_tiers(
                     "calib_group": new_group,
                 }
                 counts[tier.source_id] += 1
-            tier_ann_maps[tier.source_id].update(ann_map)
+            tier_ann_maps[tier.source_id].update(
+                {(split, old): new for old, new in ann_map.items()}
+            )
         schema.save_instances(
             out_root,
             split,
@@ -306,6 +340,6 @@ def merge_tiers(
         "recordings": recordings,
     }
     if masks:
-        manifest["masks"] = _merge_masks(tiers, tier_ann_maps, out_root, workers)
+        manifest["masks"] = _merge_masks(tiers, tier_ann_maps, tier_img_splits, out_root, workers)
     schema.save_manifest(out_root, manifest)
     return manifest

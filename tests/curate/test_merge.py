@@ -361,3 +361,24 @@ def test_frameset_ann_ids_resolve_in_the_sidecar_when_both_splits_are_populated(
                 loaded = store.load(rec, cam, frame, ann_id)
                 assert loaded is not None, f"{split} {fs} ann {ann_id} missing from {names[img_id]}"
                 assert np.array_equal(loaded, expected)
+
+
+def test_mask_rows_resolve_when_a_tier_reuses_ids_across_its_splits(make_tier, tmp_path):
+    a = make_tier("a", recording="rec1", n_frames=1, val_frames=1, restart_val_ids=True)
+    mask = np.zeros((2, 2), bool)
+    mask[0, 1] = True
+    write_mask(a, "rec1", "Cam01", 100, [1], [mask])
+    out = tmp_path / "out"
+    merge_tiers([spec(a, "a")], out, copy_images=False)
+    coco = schema.load_instances(out, "train")
+    fs = next(iter(coco["framesets"].values()))
+    store = MaskStore(sidecar_path(out))
+    loaded = store.load("rec1", "Cam01", 100, fs["ann_ids"][0])
+    assert loaded is not None, f"train ann {fs['ann_ids'][0]} lost its mask row"
+    assert np.array_equal(loaded, mask)
+
+
+def test_an_image_in_both_of_a_tiers_split_files_is_rejected(make_tier, tmp_path):
+    a = make_tier("a", recording="rec1", n_frames=1, val_frames=1, val_first_frame=100)
+    with pytest.raises(ValueError, match="both the 'train' and 'val'"):
+        merge_tiers([spec(a, "a")], tmp_path / "out", copy_images=False)
