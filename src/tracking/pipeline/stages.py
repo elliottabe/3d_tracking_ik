@@ -31,6 +31,15 @@ STAGES: tuple[Stage, ...] = (
         ("kp2d.npz", "kp3d.npz", "mvq_meta.json", "sex.json"),
         "signature",
     ),
+    # The 3D-given entry: a recording whose keypoints are already lifted and
+    # live in one whole-recording CSV. Peer of `fine`, which infers them.
+    Stage(
+        "ingest3d",
+        "recording",
+        ("kp3d_csv", "bouts.csv"),
+        ("kp3d.npz", "sex.json"),
+        "partial",
+    ),
     Stage("kpvideo", "bout", ("kp3d.npz", "video"), ("kpvideo.mp4",), "exists"),
     Stage(
         "preprocess",

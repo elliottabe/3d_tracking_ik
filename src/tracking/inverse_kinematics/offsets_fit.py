@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import h5py
@@ -14,6 +15,7 @@ import numpy as np
 import optax
 
 from tracking.conventions import plain_mapping
+from tracking.inverse_kinematics.perframe import _qs_to_opt
 from tracking.inverse_kinematics.solver import (
     PerFrameSolver,
     SolverSettings,
@@ -287,6 +289,7 @@ def pose_optimization(
     orientation_idx=None,
     settings=None,
     solver=None,
+    freeze_dof_patterns: Sequence[str] = (),
 ):
     """One independent per-frame LM solve over every frame of `kp_data`
     `(T, K*3)`, warm-started by tiling
@@ -310,7 +313,7 @@ def pose_optimization(
         rear, left, right, front = orientation_idx
         quats = np.asarray(estimate_orientation_from_keypoints(kp_data, rear, left, right, front))
         q_init[:, 3:7] = quats
-    qs_to_opt = np.ones(int(anatomy.nq), dtype=bool)
+    qs_to_opt = _qs_to_opt(anatomy, freeze_dof_patterns)
 
     solver = PerFrameSolver(settings) if solver is None else solver
     qpos = solver.solve(
@@ -387,7 +390,9 @@ def offset_optimization(
     return mjx_model, mjx_data, np.asarray(offset_opt_param, dtype=np.float64)
 
 
-def fit_offsets_from_flat(anatomy, kp_flat, *, solver_cfg) -> OffsetsFit:
+def fit_offsets_from_flat(
+    anatomy, kp_flat, *, solver_cfg, freeze_dof_patterns: Sequence[str] = ()
+) -> OffsetsFit:
     """`(T, K*3)` ALREADY in model units in; alternates root -> N_ITERS x
     (pose, offset) -> a final pose solve, exactly `Stac.fit_offsets`'s own
     sequence. `solver_cfg` is a plain mapping read for `N_ITERS`,
@@ -450,6 +455,7 @@ def fit_offsets_from_flat(anatomy, kp_flat, *, solver_cfg) -> OffsetsFit:
             orientation_idx=orientation_idx,
             settings=settings,
             solver=solver,
+            freeze_dof_patterns=freeze_dof_patterns,
         )
         mjx_model, mjx_data, offsets = offset_optimization(
             anatomy,
@@ -475,6 +481,7 @@ def fit_offsets_from_flat(anatomy, kp_flat, *, solver_cfg) -> OffsetsFit:
         orientation_idx=orientation_idx,
         settings=settings,
         solver=solver,
+        freeze_dof_patterns=freeze_dof_patterns,
     )
 
     return OffsetsFit(
@@ -487,13 +494,17 @@ def fit_offsets_from_flat(anatomy, kp_flat, *, solver_cfg) -> OffsetsFit:
     )
 
 
-def fit_offsets(anatomy, kp3d_units, *, scale, solver_cfg) -> OffsetsFit:
+def fit_offsets(
+    anatomy, kp3d_units, *, scale, solver_cfg, freeze_dof_patterns: Sequence[str] = ()
+) -> OffsetsFit:
     """`(T, K, 3)` world units in; scales via `scaled_model_keypoints`, then
     delegates to `fit_offsets_from_flat`."""
     kp_flat = scaled_model_keypoints(
         kp3d_units, scale=scale, mocap_scale_factor=anatomy.mocap_scale_factor
     )
-    return fit_offsets_from_flat(anatomy, kp_flat, solver_cfg=solver_cfg)
+    return fit_offsets_from_flat(
+        anatomy, kp_flat, solver_cfg=solver_cfg, freeze_dof_patterns=freeze_dof_patterns
+    )
 
 
 def write_offsets_h5(path, fit: OffsetsFit, *, anatomy, cfg) -> None:

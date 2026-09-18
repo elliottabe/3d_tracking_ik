@@ -1,0 +1,39 @@
+# The Johnson lab amputation cohort: 103 single-fly recordings whose 3D
+# keypoints already exist as one whole-recording data3D.csv each.
+#
+#   python -m tracking.run recording=amputation ik=amputation \
+#       recording.id=2026_07_06_16_55_07 run.name=ik_v1
+#
+# Parameterized on `id` like session1.yaml -- every other field is identical
+# across the cohort (verified on disk 2026-09-17).
+
+id: "2026_07_06_16_55_07"
+
+name: "${recording.id}"
+assay: amputation
+
+# The cohort lives under the PROCESSED root, not Video_recordings: these are
+# already-lifted 3D predictions, not raw video. run.root is a subdirectory of
+# this, so a run's outputs land beside the data3D.csv they came from.
+session_dir: "${paths.base_dir}/amputation/${recording.id}"
+
+# No calibration exists for this cohort, and no 2D is ever read. A `cameras`
+# list here with no calib_dir to order it against is refused by
+# RecordingSpec.validate().
+calib_dir: null
+cameras: []
+
+num_animals: 1
+
+# Measured off this cohort's own bout table: 187 frames / 0.23375 s = 800.0.
+fps: 800.0
+
+bouts_csv: "${recording.session_dir}/running_bouts_summary.csv"
+
+# The whole-recording 3D table `ingest3d` slices into per-bout kp3d.npz.
+# Its presence is also what puts `_load_anatomy` on the filtered path.
+kp3d_csv: "${recording.session_dir}/data3D.csv"
+
+# Cohort-level fly metadata (flyID, sex, recording, amp). Covers 93 of the
+# 103 on-disk recordings; the rest get sex "unknown".
+index_csv: "${paths.base_dir}/amputation/index.csv"

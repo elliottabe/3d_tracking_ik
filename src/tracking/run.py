@@ -48,11 +48,25 @@ def _discover_bout_ids(run_root: Path) -> list[int]:
 
 
 def _load_anatomy(cfg: DictConfig):
-    """`inverse_kinematics.anatomy.load_anatomy`, fed a DETACHED anatomy cfg."""
+    """`load_anatomy`, intersected with what this recording actually tracked.
+
+    A recording that names a `kp3d_csv` carries its own keypoint set, which may
+    be a subset of the anatomy's (an amputated fly has no markers distal to the
+    amputation). Deriving the set from the file's own header means it cannot
+    drift from the data. Every other recording takes the unchanged strict path.
+    """
     from tracking.inverse_kinematics.anatomy import load_anatomy
 
     detached = OmegaConf.create(OmegaConf.to_container(cfg.anatomy, resolve=False))
-    return load_anatomy(detached)
+    kp3d_csv = cfg.recording.get("kp3d_csv", None)
+    if kp3d_csv is None:
+        return load_anatomy(detached)
+
+    from tracking.io.kp3d_csv import read_kp3d_header
+
+    return load_anatomy(
+        detached, tracked_kp_names=read_kp3d_header(kp3d_csv), strict=False
+    )
 
 
 def _recording_spec(cfg: DictConfig):
@@ -126,6 +140,17 @@ def _execute(work: P.Work, cfg: DictConfig, ctx: dict[str, Any], bout_ids: list[
         bouts = read_bout_summary(spec.bouts_csv, session_tag=spec.name)
         with timed(timing_path, stage, n_items=len(bouts)):
             write_bouts_csv(run_root / "bouts.csv", bouts)
+        return
+
+    if stage == "ingest3d":
+        from tracking.io.bouts import read_bouts_csv, select
+        from tracking.pipeline.ingest_stages import ingest3d_recording
+
+        bouts = select(read_bouts_csv(run_root / "bouts.csv"), bout_ids)
+        with timed(timing_path, stage, n_items=len(bouts)):
+            ingest3d_recording(
+                run_root, spec=spec, kp_order=anatomy.kp_order, bouts=bouts
+            )
         return
 
     if stage == "fine":
@@ -232,6 +257,7 @@ def _execute(work: P.Work, cfg: DictConfig, ctx: dict[str, Any], bout_ids: list[
                 n_frames=int(cfg.preprocess.offsets.n_frames),
                 min_conf=float(cfg.preprocess.offsets.min_conf),
                 mad_k=float(cfg.preprocess.offsets.mad_k),
+                freeze_dof_patterns=_plain(cfg.ik.get("freeze_dof_patterns", [])),
             )
         return
 
@@ -270,6 +296,7 @@ def _execute(work: P.Work, cfg: DictConfig, ctx: dict[str, Any], bout_ids: list[
                 offsets=offsets,
                 scale=scale,
                 per_frame_cfg={**_plain(cfg.ik.per_frame), "dt": 1.0 / float(spec.fps)},
+                freeze_dof_patterns=_plain(cfg.ik.get("freeze_dof_patterns", [])),
             )
         return
 
@@ -363,7 +390,7 @@ def _context(cfg: DictConfig, works: list[P.Work]) -> dict[str, Any]:
     ctx: dict[str, Any] = {"spec": spec}
     if any(w.skip_reason is None for w in works):
         ctx["anatomy"] = _load_anatomy(cfg)
-        ctx["rig"] = _rig(spec)
+        ctx["rig"] = _rig(spec) if spec.has_rig else None
     return ctx
 
 
