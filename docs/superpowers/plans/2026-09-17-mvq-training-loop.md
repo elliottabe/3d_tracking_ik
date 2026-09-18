@@ -478,7 +478,7 @@ pytestmark = pytest.mark.skipif(not os.path.isdir(ROOT), reason="unified root no
 
 
 def _ds(**kw):
-    return WindowDataset(ROOT, split="train", window_length=1, train=True, **kw)
+    return WindowDataset(ROOT, split="train", T=1, train=True, **kw)
 
 
 def test_augmentation_is_off_by_default():
@@ -920,7 +920,7 @@ def test_a_single_fly_window_is_never_a_contact_pair():
 @pytest.mark.skipif(not os.path.isdir(ROOT), reason="unified root not present")
 def test_cohorts_on_the_real_root_are_non_empty():
     from tracking.train.data.windows import WindowDataset
-    c = cohorts(WindowDataset(ROOT, split="val", window_length=1, train=False))
+    c = cohorts(WindowDataset(ROOT, split="val", T=1, train=False))
     assert c["female"].any() and c["single_fly"].any()
 ```
 
