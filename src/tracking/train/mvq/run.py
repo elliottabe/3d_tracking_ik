@@ -12,6 +12,7 @@ from __future__ import annotations
 import collections
 import dataclasses
 import json
+import math
 import os
 import sys
 import time
@@ -195,11 +196,66 @@ def _temperatures(model, ds, tcfg, mesh):
     v_logits, v_targets = np.concatenate(v_logits), np.concatenate(v_targets)
     if not e_logits.size or not v_logits.size:
         return 1.0, 1.0
-    return fit_temperature(e_logits, e_targets), fit_temperature(v_logits, v_targets)
+    return (
+        fit_temperature(e_logits, e_targets, "exist"),
+        fit_temperature(v_logits, v_targets, "vis"),
+    )
+
+
+def loss_weights(node) -> LossWeights:
+    """`LossWeights` from a `loss` config node; a MISSING node WARNS.
+
+    Every `LossWeights` default coincides with the v2 run except
+    `other_fly_repulsion`, whose 0 turns term 7b off outright -- so a silent
+    fallback here trains a plausible-looking run with no cross-fly repulsion.
+    """
+    weights = _dataclass(LossWeights, node)
+    if node is None:
+        print(
+            "[mvq] WARNING no `loss` config group -- training on LossWeights() defaults: "
+            + " ".join(f"{k}={v:g}" for k, v in dataclasses.asdict(weights).items())
+            + ". other_fly_repulsion=0 means the cross-fly repulsion term is NOT traced; "
+            "compose with `loss=mvq_v2` (or `loss=default`) to choose explicitly.",
+            flush=True,
+        )
+    return weights
+
+
+def check_finite(loss, step, T, metrics, latest_ckpt) -> None:
+    """Raise on a non-finite training loss, naming the term that went bad.
+
+    The EMA is a running sum that is never reset, so one NaN poisons every
+    later checkpoint, and `max_to_keep` deletes the clean ones within a few
+    saves. `loss` is already on the host, so the check is free.
+    """
+    if math.isfinite(loss):
+        return
+    ms = " ".join(f"{k}={float(v):.4f}" for k, v in metrics.items())
+    print(f"[mvq] FATAL non-finite loss {loss} at step {step} (T={T}): {ms}", flush=True)
+    raise ValueError(
+        f"non-finite loss {loss} at step {step} -- stopping before it reaches the EMA and the "
+        f"checkpoints; the last clean checkpoint is step {latest_ckpt}"
+    )
 
 
 def _write_meta(run_dir, meta) -> None:
-    with open(os.path.join(run_dir, "mvq_run.json"), "w") as f:
+    """Write `<run_dir>/mvq_run.json`, KEEPING an earlier run's `calibration`
+    and `val` where this write has none.
+
+    The startup write carries neither, and `load_mvq_model(..., step=<n>)`
+    prefers this file over `final/mvq_run.json`, so a plain overwrite on a
+    requeue would silently serve the identity temperature.
+    """
+    path = os.path.join(run_dir, "mvq_run.json")
+    if os.path.exists(path):
+        with open(path) as f:
+            old = json.load(f)
+        meta = dict(meta)
+        for k in ("calibration", "val"):
+            if meta.get(k) is None and old.get(k) is not None:
+                meta[k] = old[k]
+                print(f"[mvq] kept the existing mvq_run.json {k!r} block", flush=True)
+    with open(path, "w") as f:
         json.dump(meta, f, indent=1)
 
 
@@ -214,7 +270,7 @@ def run_training(cfg) -> dict:
     tcfg = _dataclass(MVQTrainConfig, cfg.train)
     mcfg = _dataclass(MVQConfig, cfg.model)
     aug = _dataclass(MVAugParams, cfg.get("aug"))
-    weights = _dataclass(LossWeights, cfg.get("loss"))
+    weights = loss_weights(cfg.get("loss"))
     if int(cfg.run.get("seed", tcfg.seed)) != int(tcfg.seed):
         print(
             f"[mvq] run.seed={int(cfg.run.seed)} is NOT used: train.seed={tcfg.seed} seeds the "
@@ -245,6 +301,12 @@ def run_training(cfg) -> dict:
     )
     overrides = dict(tcfg.sex_label_overrides or {})
     names = list(schema.keypoint_order(root).names)
+    if len(names) != mcfg.num_keypoints:
+        raise ValueError(
+            f"{root} declares {len(names)} keypoints but model.num_keypoints="
+            f"{mcfg.num_keypoints} -- the mismatch would surface inside mvq_loss, after the "
+            f"backbone is fetched and built"
+        )
     lr_swap = build_lr_swap(names)
     part_of_k, _ = build_part_index(names)
     kp_weight = wing_kp_weight(names, tcfg.wing_kp_mult)
@@ -300,7 +362,11 @@ def run_training(cfg) -> dict:
     if not tcfg.smoke:
         cohort_masks = cohorts(val_ds)
         for c in tcfg.val_cohorts:
-            if not cohort_masks.get(c, np.zeros(1, bool)).any():
+            if c not in cohort_masks:
+                raise ValueError(
+                    f"val cohort {c!r} is not a cohort of {root} (known: {sorted(cohort_masks)})"
+                )
+            if not cohort_masks[c].any():
                 raise ValueError(f"val cohort {c!r} is empty on {root}")
 
     # Written BEFORE the model build so a failed build still leaves a usable
@@ -428,6 +494,7 @@ def run_training(cfg) -> dict:
                     )
         loss, metrics, ema = step_fn(model, opt, ema, batch)
         loss = float(loss)
+        check_finite(loss, i + 1, T, metrics, mngr.latest_step())
         ema_updates += 1
         if (i + 1) % tcfg.log_every == 0:
             ms = " ".join(f"{k}={float(v):.4f}" for k, v in metrics.items() if k != "total")
@@ -450,8 +517,9 @@ def run_training(cfg) -> dict:
                 kp_weight=kp_weight,
             )
             print("  val " + " ".join(f"{k}={v:.4f}" for k, v in val.items()), flush=True)
-            # `del em` frees nothing alone (it aliases `ema`'s buffers); the
-            # cache clear is what stops eval's executable fragmenting the pool.
+            # `with_ema` clones and rebinds, so `em` holds the only reference to
+            # those buffers; the cache clear is what stops eval's executable
+            # fragmenting the pool.
             del em
             jax.clear_caches()
         if (i + 1) % tcfg.save_every == 0:
@@ -466,35 +534,38 @@ def run_training(cfg) -> dict:
     em = with_ema(model, ema, tcfg.ema, ema_updates)
     val, temps = None, (1.0, 1.0)
     if not tcfg.smoke:
-        val = evaluate(
-            em,
-            val_ds,
-            tcfg.batch_size,  # the batch size training used: a smaller one reshards
-            cohort_masks=cohort_masks,
-            part_of_k=part_of_k,
-            weights=weights,
-            mesh=mesh,
-            num_workers=tcfg.num_workers,
-            kp_weight=kp_weight,
-        )
-        print("  val " + " ".join(f"{k}={v:.4f}" for k, v in val.items()), flush=True)
+        # The WHOLE final pass is guarded, evaluation included: it is first
+        # reached after ~2 days of training, and an OOM here must not cost
+        # `final/` and the calibration.
         try:
+            val = evaluate(
+                em,
+                val_ds,
+                tcfg.batch_size,  # the batch size training used: a smaller one reshards
+                cohort_masks=cohort_masks,
+                part_of_k=part_of_k,
+                weights=weights,
+                mesh=mesh,
+                num_workers=tcfg.num_workers,
+                kp_weight=kp_weight,
+            )
+            print("  val " + " ".join(f"{k}={v:.4f}" for k, v in val.items()), flush=True)
             temps = _temperatures(em, val_ds, tcfg, mesh)
-        except Exception as exc:  # noqa: BLE001 -- first runs after ~2 days of training
+        except Exception as exc:  # noqa: BLE001
             print(
-                f"[mvq] WARNING calibration failed ({exc!r}) -- writing the identity 1.0/1.0 "
-                f"and keeping the final checkpoint",
+                f"[mvq] WARNING final evaluation/calibration failed ({exc!r}) -- keeping the "
+                f"final checkpoint; val is {'absent' if val is None else 'the completed pass'} "
+                f"and the temperatures stay at the identity 1.0/1.0",
                 flush=True,
             )
-    # `fit_temperature` searches a BOUNDED T; a saturated fit would otherwise
-    # divide MVQRunner's logits unremarked.
     print(
-        f"[mvq] calibration: exist_temperature={temps[0]:.4f} vis_temperature={temps[1]:.4f}",
+        f"[mvq] calibration: exist_temperature={temps[0]:.4f} vis_temperature={temps[1]:.4f} "
+        f"(n_val={len(val_ds)})",
         flush=True,
     )
     meta["val"] = val
     _write_meta(run_dir, meta)
-    write_calibration(run_dir, *temps)
+    write_calibration(run_dir, *temps, n_val=len(val_ds))
     with open(os.path.join(run_dir, "mvq_run.json")) as f:
         meta = json.load(f)
     save_final(run_dir, model, nnx.state(em, nnx.Param), meta)
