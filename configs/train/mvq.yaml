@@ -1,0 +1,35 @@
+# MVQTrainConfig defaults (src/tracking/train/mvq/config.py). P3b baseline,
+# T=1, maskless (no prompt-anneal), one unified training root.
+lr: 3e-4
+weight_decay: 0.05
+warmup_steps: 500
+total_steps: 30000
+batch_size: 32
+backbone_lr_mult: 0.1
+grad_clip: 1.0
+ema: 0.999
+seed: 0
+window_lengths: [1]
+female_weight: 1.0
+balance_alpha: 0.5
+log_every: 50
+eval_every: 2000
+save_every: 1000
+num_workers: 16
+loader_workers: threads
+pretrained: true
+smoke: false
+val_cohorts: [female, two_fly]
+copy_paste_p: 0.0
+copy_paste_opposite_sex_p: 0.7
+copy_paste_contact_p: 0.3
+copy_paste_contact_sep: [8.0, 30.0]
+female_host_weight: 1.0
+sex_label_overrides: {}
+warm_start: null
+jitter_units: 3.0
+pair_deltas: [1]
+pseudo_weight: 0.3
+negatives_frac: 0.05
+female_host_target: null
+wing_kp_mult: 1.0

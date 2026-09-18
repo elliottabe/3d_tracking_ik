@@ -1,0 +1,18 @@
+# MVAugParams (jarvis_jax.data.mv_augment) defaults, cam_drop_p lowered to
+# 0.1 for the unified training root's mvq training loop.
+enabled: true
+rot_deg: 30.0
+scale_min: 0.8
+scale_max: 1.25
+translate_frac: 0.1
+world_yaw: true
+world_tilt_deg: 30.0
+mirror_p: 0.5
+cam_drop_p: 0.1
+cam_drop_max: 2
+brightness: 0.2
+contrast: 0.2
+gamma: 0.2
+blur_max: 0.5
+noise_scale: 0.02
+pc_color: 0.2

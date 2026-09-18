@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -12,6 +13,11 @@ from PIL import Image
 CAMERAS = ("Cam01", "Cam02", "Cam03")
 KP_NAMES = ["Antenna_Base", "EyeL", "EyeR", "Scutellum"]
 W, H = 64, 48
+
+
+@pytest.fixture
+def repo_root():
+    return Path(__file__).resolve().parents[1]
 
 
 def affine_matrix(seed: int) -> np.ndarray:

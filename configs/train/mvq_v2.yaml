@@ -1,0 +1,19 @@
+# MVQ v2 preset (spec 2026-09-05 Sec 4): T<=2 windows, unified training root,
+# the female-host and copy-paste settings the shipped v2 checkpoint trained
+# with (configs/mvq/v2.yaml is the matching inference config).
+defaults:
+  - mvq
+
+warmup_steps: 1000
+total_steps: 40000
+window_lengths: [1, 2]
+pair_deltas: [1, 4, 16]
+jitter_units: 10.0
+female_host_weight: 4.27
+female_host_target: 0.5
+copy_paste_p: 0.8
+copy_paste_contact_p: 0.7
+copy_paste_contact_sep: [4.0, 25.0]
+wing_kp_mult: 2.0
+loader_workers: processes
+num_workers: 24
