@@ -21,6 +21,8 @@ MANIFEST_DIR="$REPO/slurm_logs"
 RUN_NAME=""
 SLURM_CFG=gpu_l40s
 CONCURRENCY=10
+# Empty means "take the profile's own constraint"; set to narrow the GPU types.
+CONSTRAINT=""
 RECORDINGS=""
 DRY=0
 
@@ -31,6 +33,7 @@ while [ $# -gt 0 ]; do
         --manifest-dir)  MANIFEST_DIR="$2"; shift 2 ;;
         --slurm)         SLURM_CFG="$2"; shift 2 ;;
         --concurrency)   CONCURRENCY="$2"; shift 2 ;;
+        --constraint)    CONSTRAINT="$2"; shift 2 ;;
         --recordings)    RECORDINGS="$2"; shift 2 ;;
         --dry-run)       DRY=1; shift ;;
         *) echo "unknown arg: $1" >&2; exit 2 ;;
@@ -39,7 +42,7 @@ done
 
 [ -n "$RUN_NAME" ] || {
     echo "usage: $0 --run-name NAME [--data-root DIR] [--manifest-dir DIR]" >&2
-    echo "          [--slurm gpu_l40s|ckpt_all] [--concurrency N]" >&2
+    echo "          [--slurm gpu_l40s|ckpt_all] [--concurrency N] [--constraint EXPR]" >&2
     echo "          [--recordings id1,id2,...] [--dry-run]" >&2
     echo "  --run-name is REQUIRED: the pipeline's own default is 'debug'," >&2
     echo "  which must never name a real campaign's outputs." >&2
@@ -106,7 +109,9 @@ echo
 
 SLURM_YAML="$REPO/configs/slurm/${SLURM_CFG}.yaml"
 [ -f "$SLURM_YAML" ] || { echo "no such slurm config: $SLURM_YAML" >&2; exit 2; }
-_y() { grep -E "^$1:" "$SLURM_YAML" | head -1 | sed -E "s/^$1:[[:space:]]*//; s/^['\"]//; s/['\"]$//"; }
+# `|| true`: a missing key makes grep exit 1, and under `set -o pipefail` that
+# status propagates. Harmless inside `[ ... ]`, fatal in a bare assignment.
+_y() { grep -E "^$1:" "$SLURM_YAML" | head -1 | sed -E "s/^$1:[[:space:]]*//; s/^['\"]//; s/['\"]$//" || true; }
 
 RESOURCE_FLAGS=(
     "--partition=$(_y partition)" "--account=$(_y account)"
@@ -120,7 +125,9 @@ RESOURCE_FLAGS=(
 # just skipping the optional flag. `|| true` makes each line's exit status
 # independent of position.
 [ -n "$(_y gres)" ]       && RESOURCE_FLAGS+=("--gres=$(_y gres)") || true
-[ -n "$(_y constraint)" ] && RESOURCE_FLAGS+=("--constraint=$(_y constraint)") || true
+# --constraint overrides the profile, e.g. to keep a campaign off the older cards.
+_CONSTRAINT="${CONSTRAINT:-$(_y constraint)}"
+[ -n "$_CONSTRAINT" ] && RESOURCE_FLAGS+=("--constraint=$_CONSTRAINT") || true
 [ -n "$(_y exclude)" ]    && RESOURCE_FLAGS+=("--exclude=$(_y exclude)") || true
 # ckpt-all is preemptible and its profile sets `requeue: true`; without this a
 # preempted array task is simply lost. session_pipeline.sh does the same

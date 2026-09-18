@@ -149,3 +149,47 @@ def test_dry_run_command_quotes_the_recording_id(tmp_path):
     assert "recording.id='" in out.stdout
     assert "stages=[bouts,ingest3d,preprocess,ik,postprocess,collect]" in out.stdout
     assert "ik=amputation" in out.stdout
+
+
+def test_constraint_flag_overrides_the_profile(tmp_path):
+    """--constraint narrows the GPU types without editing a shared profile."""
+    root = _data_root(tmp_path, ["2026_07_06_16_55_07"])
+    common = [
+        "--dry-run",
+        "--run-name",
+        "ik_v1",
+        "--data-root",
+        str(root),
+        "--manifest-dir",
+        str(tmp_path),
+        "--slurm",
+        "ckpt_all",
+    ]
+
+    default = _run(*common)
+    assert default.returncode == 0, default.stderr
+    assert "--constraint=h200|a100|l40s|l40|a40" in default.stdout
+
+    narrowed = _run(*common, "--constraint", "h200|a100|l40s")
+    assert narrowed.returncode == 0, narrowed.stderr
+    assert "--constraint=h200|a100|l40s " in narrowed.stdout + " "
+    assert "a40" not in narrowed.stdout.split("--wrap")[0]
+
+
+def test_constraint_flag_on_a_profile_without_one_adds_it(tmp_path):
+    root = _data_root(tmp_path, ["2026_07_06_16_55_07"])
+    out = _run(
+        "--dry-run",
+        "--run-name",
+        "ik_v1",
+        "--data-root",
+        str(root),
+        "--manifest-dir",
+        str(tmp_path),
+        "--slurm",
+        "gpu_l40s",
+        "--constraint",
+        "h200",
+    )
+    assert out.returncode == 0, out.stderr
+    assert "--constraint=h200" in out.stdout
