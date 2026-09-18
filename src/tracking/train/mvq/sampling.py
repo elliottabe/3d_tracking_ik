@@ -25,6 +25,10 @@ def balanced_weights(ds, alpha, female_weight, female_host_weight=1.0,
     female-host mass exactly on `target`, and `female_host_weight` is unused.
     A source with no female (or no male/other) host cannot reach any interior
     target; the multiplier stays 1.0 and a note prints, naming `label`.
+
+    The behaviour-category axis is INERT on `unified_v2`: no frameset there
+    carries a `behavior` field, so every window's category is `"unknown"` and
+    the balance reduces to host-sex alone.
     """
     is_f = np.array([ds.is_female(i) for i in range(len(ds))], bool)
     cats = [f"{ds.behavior(i)}_{'female' if is_f[i] else 'other'}" for i in range(len(ds))]

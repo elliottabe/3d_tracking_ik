@@ -65,8 +65,11 @@ class LossWeights:
     own formula (`c*err - lambda*log(c)`), trading off how hard `c` is penalised
     for saturating toward 0. The confidence term always contributes at weight 1.
 
-    `other_fly_repulsion` and `persist` are 0-is-OFF switches (T=1 batches and
-    every pre-P3b run's loss are unchanged at 0).
+    `other_fly_repulsion` and `persist` are both 0-is-OFF, but they gate on
+    DIFFERENT axes. `persist` (term 9) also needs `T > 1`, so it is inert on a
+    T=1 batch whatever its weight. `other_fly_repulsion` (term 7b) needs
+    `F > 1` and is live at ANY T -- leaving it at 0 silently trains a
+    multi-fly run with no cross-fly repulsion at all.
 
     There is deliberately no `wing_kp_mult` here: `mvq_loss` takes the
     already-built (K,) `kp_weight` vector, so the multiplier lives in ONE place

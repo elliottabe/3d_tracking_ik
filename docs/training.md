@@ -216,7 +216,7 @@ Mask sidecars add ~18 G (2.2 G human + 16 G p3b).
 
 Entry point: `python -m tracking.train.mvq` (also `python -m tracking.train.mvq.run`).
 Hydra config: `configs/train.yaml` (`run.name`, `paths`) plus the `model`,
-`train` and `aug` groups. Code: `src/tracking/train/`.
+`train`, `aug` and `loss` groups. Code: `src/tracking/train/`.
 
 ```bash
 # the v2 preset on the unified root, run dir <paths.runs_root>/<run.name>
@@ -247,11 +247,21 @@ shipped v2 checkpoint trained with:
 | `copy_paste_contact_p` / `_sep` | 0.7 / `[4.0, 25.0]` | how often, and how close |
 | `wing_kp_mult` | 2.0 | per-keypoint loss multiplier on wing landmarks |
 | `loader_workers` / `num_workers` | `processes` / 24 | one spawn pool shared by both T streams |
+| `save_every` | 2000 | checkpoint interval (`max_to_keep=3`) |
+| `val_cohorts` | `[female, two_fly, contact_pair, single_fly]` | the four acceptance cohorts; each must be non-empty or the run fails at startup |
+
+It also selects `loss=mvq_v2`, which is `configs/loss/default.yaml` with
+`other_fly_repulsion: 20.0` -- the cross-fly repulsion term is gated on
+`w.other_fly_repulsion > 0`, so at the `LossWeights` default of 0 it is never
+traced. Composing with no `loss` group at all still works and warns, naming
+the defaults it fell back to.
 
 Sampling is source-aware: negatives take `negatives_frac` of the mass, the
 rest splits by window count, and each source's own behaviour/host-sex balance
-is restored inside it. A window's loss weight is its own frameset's `weight`
-field (resolved frameset -> recording -> root default, never from
+is restored inside it. The behaviour axis is **inert on `unified_v2`** -- no
+frameset there carries a `behavior` field, so every window's category is
+`unknown` and the balance reduces to host-sex. A window's loss weight is its
+own frameset's `weight` field (resolved frameset -> recording -> root default, never from
 `manifest.sources`, which records the tier's declared weight independently);
 `train.pseudo_weight` is checked against the realised per-source mean and
 **warns** on disagreement, training at the framesets' value.
@@ -283,4 +293,9 @@ sampler, augmentation, step, `ckpt/`, `final/` -- is the real thing.
 `step=<n>`/`"latest"`, or `<run_dir>/final` with `step=None`. Evaluation runs
 every `train.eval_every` steps and once at the end; the final pass also fits
 the existence/visibility temperatures written to `mvq_run.json["calibration"]`,
-which `MVQRunner` divides its logits by (`1.0` is the identity).
+which `MVQRunner` divides its logits by (`1.0` is the identity). That block
+also records `n_val`, and a fit that saturates the bounded search prints a
+warning naming which of the two it was. The whole final pass -- evaluation,
+calibration -- is guarded: a failure there still writes `final/`. A relaunch
+of the same `run.name` rewrites the run-root `mvq_run.json` at startup but
+KEEPS an earlier `calibration`/`val`, which the `step=<n>` loader reads.
