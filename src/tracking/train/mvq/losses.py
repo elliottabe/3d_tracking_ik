@@ -13,6 +13,36 @@ from tracking.detector.mvq.slots import N_SLOTS, SEX_FEMALE
 from tracking.train.mvq.matching import assign_slots, slot_ignore
 
 WING_RE = re.compile(r"^Wing")
+_LEG_RE = re.compile(r"^T[1-3][LR]_(.+)$")
+_WING_PART_RE = re.compile(r"^Wing[LR]_(.+)$")
+_EYE_RE = re.compile(r"^Eye[LR]$")
+
+
+def part_name(name: str) -> str:
+    """Anatomical part shared across legs and sides; midline names unchanged.
+
+    >>> part_name("T2R_TaTip"), part_name("WingR_V12"), part_name("EyeL")
+    ('TaTip', 'Wing_V12', 'Eye')
+    """
+    m = _LEG_RE.match(name)
+    if m:
+        return m.group(1)
+    m = _WING_PART_RE.match(name)
+    if m:
+        return "Wing_" + m.group(1)
+    return "Eye" if _EYE_RE.match(name) else name
+
+
+def build_part_index(kp_names):
+    """`(part_of_k int32 (K,), parts)` -- the keypoint -> body-part map
+    `mvq_loss`'s same-part repulsion term groups by.
+
+    >>> build_part_index(["T1L_Tro", "T3R_Tro", "Scutellum"])[0].tolist()
+    [1, 1, 0]
+    """
+    parts = sorted({part_name(str(n)) for n in kp_names})
+    idx = {p: i for i, p in enumerate(parts)}
+    return np.asarray([idx[part_name(str(n))] for n in kp_names], np.int32), parts
 
 
 def wing_kp_weight(kp_names, mult=2.0):

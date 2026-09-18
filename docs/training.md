@@ -211,3 +211,62 @@ Dereferenced, maskless (spec §5.4):
 | **unified** | **36,830** | **210,609** | **~44 G** |
 
 Mask sidecars add ~18 G (2.2 G human + 16 G p3b).
+
+## MVQ training
+
+Entry point: `python -m tracking.train.mvq` (also `python -m tracking.train.mvq.run`).
+Hydra config: `configs/train.yaml` (`run.name`, `paths`) plus the `model`,
+`train` and `aug` groups. Code: `src/tracking/train/`.
+
+```bash
+# the v2 preset on the unified root, run dir <paths.runs_root>/<run.name>
+PYTHONPATH=$PWD/src python -m tracking.train.mvq train=mvq_v2 paths=hyak run.name=mvq_t2_v2
+
+# a different root, and a 2-step plumbing check that writes a real run dir
+PYTHONPATH=$PWD/src python -m tracking.train.mvq train=mvq_v2 run.name=smoke \
+  paths.train_data_root=/path/to/unified_v2 train.smoke=true train.total_steps=2 \
+  train.batch_size=2 train.window_lengths=[1] train.loader_workers=threads
+```
+
+`PYTHONPATH=$PWD/src` is only needed when the environment's editable install
+points at a different checkout; with this checkout installed it can be dropped.
+
+### The v2 preset
+
+`configs/train/mvq_v2.yaml` (on top of `configs/train/mvq.yaml`) is what the
+shipped v2 checkpoint trained with:
+
+| key | value | meaning |
+| --- | --- | --- |
+| `total_steps` / `warmup_steps` | 40000 / 1000 | AdamW, warmup + cosine decay |
+| `window_lengths` | `[1, 2]` | one stream per T, alternating by step |
+| `pair_deltas` | `[1, 4, 16]` | frame spacings a T=2 window may span |
+| `jitter_units` | 10.0 | crop-centre jitter |
+| `female_host_target` | 0.5 | solved per source; `female_host_weight` unused while set |
+| `copy_paste_p` | 0.8 | second fly pasted in, needs `paths.masks_root` |
+| `copy_paste_contact_p` / `_sep` | 0.7 / `[4.0, 25.0]` | how often, and how close |
+| `wing_kp_mult` | 2.0 | per-keypoint loss multiplier on wing landmarks |
+| `loader_workers` / `num_workers` | `processes` / 24 | one spawn pool shared by both T streams |
+
+Sampling is source-aware: negatives take `negatives_frac` of the mass, the
+rest splits by window count, and each source's own behaviour/host-sex balance
+is restored inside it. A window's loss weight is its frameset's `weight` from
+`manifest.sources`; `train.pseudo_weight` is checked against it and **warns**
+on disagreement, training at the manifest's value.
+
+### Run layout
+
+```
+<paths.runs_root>/<run.name>/
+  mvq_run.json          resolved model/train/loss/aug config, keypoint_names,
+                        train_data (per-source mass + realised mix), val, calibration
+  ckpt/<step>/          model, opt, ema, ema_meta -- resumable; a rerun of the
+                        same run.name picks up from the latest step
+  final/                debiased EMA weights + a copy of mvq_run.json
+```
+
+`tracking.detector.mvq.checkpoint.load_mvq_model` reads both: the run dir with
+`step=<n>`/`"latest"`, or `<run_dir>/final` with `step=None`. Evaluation runs
+every `train.eval_every` steps and once at the end; the final pass also fits
+the existence/visibility temperatures written to `mvq_run.json["calibration"]`,
+which `MVQRunner` divides its logits by (`1.0` is the identity).
