@@ -4,9 +4,12 @@ Port of `$SRC/train/train_mvq.py:142-205,1160` (jarvis_jax). Maskless
 deviations: `_batch_to_model` drops the label mask entirely (the model's
 mask kwarg defaults to `None`), and `prompt_on` is fixed at `False` rather
 than drawn from that mask + a Bernoulli prompt probability -- augmentation
-now lives in the loader (Task 4). `decoder.py` computes
-`add = self.prompt_proj(prompt_tok) * on[:, None]`, so `on=False` makes the
-prompt contribution exactly zero, matching v2's `prompt_p_start/end = 0.0`.
+now lives in the loader (Task 4). With no mask, `model.py` never builds a
+prompt token, so `decoder.py` skips its whole prompt-add branch outright --
+the same zero contribution v2 got from `on=False` when a mask existed.
+`prompt_on` still matters downstream: `mvq_loss` -> `assign_slots`
+(`matching.py`) reads it to route the host fly to the prompted slot, so a
+stray `True` would corrupt the existence/sex targets.
 """
 from __future__ import annotations
 

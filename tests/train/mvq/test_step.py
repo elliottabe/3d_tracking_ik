@@ -1,11 +1,10 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
-import optax
 import pytest
 
 from tracking.train.mvq.config import MVQTrainConfig
-from tracking.train.mvq.step import normalize_crops
+from tracking.train.mvq.step import make_optimizer, normalize_crops
 
 
 def test_normalize_crops_matches_imagenet_stats():
@@ -31,10 +30,27 @@ def test_optimizer_has_two_lr_groups_and_one_global_clip():
 
 
 def test_backbone_lr_is_scaled_by_the_multiplier():
-    cfg = MVQTrainConfig(lr=1e-3, backbone_lr_mult=0.1, warmup_steps=0, total_steps=10)
-    sched_head = optax.warmup_cosine_decay_schedule(0.0, cfg.lr, 0, 10, 0.0)
-    sched_bb = optax.warmup_cosine_decay_schedule(0.0, cfg.lr * cfg.backbone_lr_mult, 0, 10, 0.0)
-    assert np.isclose(float(sched_bb(5)), float(sched_head(5)) * 0.1, rtol=1e-6)
+    """The backbone group really is stepped at lr*mult and the head at lr."""
+    from flax import nnx
+
+    class Tiny(nnx.Module):
+        def __init__(self, rngs):
+            self.backbone = nnx.Linear(2, 2, rngs=rngs)
+            self.head = nnx.Linear(2, 2, rngs=rngs)
+
+    m = Tiny(nnx.Rngs(0))
+    cfg = MVQTrainConfig(
+        lr=1e-3, backbone_lr_mult=0.1, warmup_steps=0, total_steps=10, grad_clip=1e9)
+    opt = make_optimizer(m, cfg)
+    before = jax.tree.map(lambda p: np.asarray(p).copy(), nnx.state(m, nnx.Param))
+    grads = jax.tree.map(lambda p: jnp.ones_like(p), nnx.state(m, nnx.Param))
+    opt.update(m, grads)
+    after = nnx.state(m, nnx.Param)
+    bb_kernel = float(after["backbone"]["kernel"][...][0, 0])
+    hd_kernel = float(after["head"]["kernel"][...][0, 0])
+    d_bb = abs(bb_kernel - float(before["backbone"]["kernel"][0, 0]))
+    d_hd = abs(hd_kernel - float(before["head"]["kernel"][0, 0]))
+    assert np.isclose(d_bb / d_hd, cfg.backbone_lr_mult, rtol=0.05), (d_bb, d_hd)
 
 
 def test_train_step_is_maskless():
