@@ -1,3 +1,5 @@
+import warnings
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -5,6 +7,17 @@ import pytest
 
 from tracking.train.mvq.config import MVQTrainConfig
 from tracking.train.mvq.step import make_optimizer, normalize_crops
+
+
+def _skip_if_device_oom(exc):
+    """Skip ONLY on a device out-of-memory (the GPU is shared); re-raise
+    anything else -- a shape or dtype regression must fail, not read as a pass.
+    """
+    msg = str(exc)
+    if "RESOURCE_EXHAUSTED" in msg or "out of memory" in msg.lower() or "OUT_OF_MEMORY" in msg:
+        warnings.warn(f"MVQModel train step not exercised: {msg.splitlines()[0]}", stacklevel=2)
+        pytest.skip(f"device out of memory: {msg.splitlines()[0]}")
+    raise
 
 
 def test_normalize_crops_matches_imagenet_stats():
@@ -54,12 +67,20 @@ def test_backbone_lr_is_scaled_by_the_multiplier():
 
 
 def test_train_step_is_maskless():
+    """Asserted on BEHAVIOUR, not on the module text: the docstring must stay
+    free to name the thing it explains."""
     import inspect
 
     import tracking.train.mvq.step as step
-    src = inspect.getsource(step)
+    batch = {"crops": jnp.zeros((1, 1, 1, 2, 2, 3), jnp.uint8),
+             "cam_valid": jnp.ones((1, 1, 1), bool), "M": jnp.zeros((1, 1, 3, 4)),
+             "t_local": jnp.zeros((1, 1, 3)), "mask": jnp.ones((1, 1))}
+    assert set(step._batch_to_model(batch)) == {"crops", "cam_valid", "M", "t_local"}, \
+        "the model call must carry no label mask"
+    src = inspect.getsource(step.make_train_step)
     assert "prompt_mask" not in src, "the train step must not reference prompt_mask"
     assert "bernoulli" not in src, "the prompt draw must be gone"
+    assert 'prompt_on=jnp.zeros((B,), bool)' in src, "prompt_on must be fixed at False"
 
 
 @pytest.mark.skipif(not jax.devices(), reason="no jax device")
@@ -103,7 +124,7 @@ def test_two_steps_do_not_increase_a_fixed_batch_loss():
             loss, _, ema = step(model, opt, ema, batch)
             losses.append(float(loss))
         after = np.asarray(jax.tree.leaves(nnx.state(model, nnx.Param))[0])
-    except Exception as e:  # device/memory dependent, not a step.py correctness signal
-        pytest.skip(f"could not build/run the real MVQ model here: {e!r}")
+    except Exception as e:
+        _skip_if_device_oom(e)
     assert losses[1] <= losses[0] * 1.05, f"loss rose: {losses}"
     assert not np.array_equal(before, after)

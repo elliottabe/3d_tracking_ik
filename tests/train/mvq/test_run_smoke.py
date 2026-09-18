@@ -1,5 +1,6 @@
 import json
 import os
+import warnings
 
 import pytest
 
@@ -8,9 +9,14 @@ pytestmark = pytest.mark.skipif(not os.path.isdir(ROOT), reason="unified root no
 
 
 def _skip_if_oom(exc):
-    """Skip on a device out-of-memory (the GPU is shared), re-raise anything else."""
+    """Skip on a device out-of-memory (the GPU is shared), re-raise anything else.
+
+    The skip also WARNS: this is the only test that runs the real driver, so a
+    silent skip would read as a pass for the whole training loop.
+    """
     msg = str(exc)
     if "RESOURCE_EXHAUSTED" in msg or "out of memory" in msg.lower():
+        warnings.warn(f"mvq smoke run not exercised: {msg.splitlines()[0]}", stacklevel=2)
         pytest.skip(f"device out of memory: {msg.splitlines()[0]}")
     raise
 
@@ -81,8 +87,12 @@ def test_two_step_smoke_run_writes_a_checkpoint_and_a_manifest(tmp_path):
 
     on_disk = json.loads((run_dir / "mvq_run.json").read_text())
     assert on_disk["model"]["backbone"] == "dinov3_b16"
-    # smoke skips the val pass, so calibration is the IDENTITY, never a fit.
-    assert on_disk["calibration"] == {"exist_temperature": 1.0, "vis_temperature": 1.0}
+    # smoke skips the val pass, so calibration is the IDENTITY, never a fit --
+    # but `n_val` is recorded either way, so a degenerate fit stays diagnosable.
+    cal = on_disk["calibration"]
+    assert set(cal) == {"exist_temperature", "vis_temperature", "n_val"}
+    assert (cal["exist_temperature"], cal["vis_temperature"]) == (1.0, 1.0)
+    assert cal["n_val"] > 0
     assert (run_dir / "final" / "mvq_run.json").is_file()
     drawn = on_disk["train_data"]["mix"]["1"]["realised"]
     assert set(drawn) == set(on_disk["train_data"]["mix"]["1"]["sources"])
@@ -101,6 +111,20 @@ def test_two_step_smoke_run_writes_a_checkpoint_and_a_manifest(tmp_path):
     assert not all(
         np.allclose(final[k], ema[k], rtol=1e-4, atol=1e-5) for k in common
     ), "final/ matches the RAW accumulator -- with_ema's debias was skipped"
+
+    # The PRODUCTION loader, on the layout this run just wrote. Nothing else in
+    # the branch calls it, and the one Critical this branch produced was a
+    # break in exactly this contract.
+    from tracking.detector.mvq.checkpoint import load_mvq_model
+
+    try:
+        loaded, loaded_meta = load_mvq_model(str(run_dir / "final"))
+    except Exception as exc:
+        _skip_if_oom(exc)
+    assert loaded is not None
+    assert loaded_meta["model"]["backbone"] == on_disk["model"]["backbone"]
+    assert loaded_meta["model"]["num_keypoints"] == on_disk["model"]["num_keypoints"]
+    assert not loaded_meta["_unrestored_leaves"], loaded_meta["_unrestored_leaves"]
 
 
 class _StubDS:

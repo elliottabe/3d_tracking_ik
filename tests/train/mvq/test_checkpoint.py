@@ -56,7 +56,14 @@ def test_ema_meta_records_the_zero_seed_flag(tmp_path):
 
 
 def test_final_layout_matches_what_the_runner_expects(tmp_path):
+    """`final/` must come BACK through the loader the runner really uses --
+    a directory existing is not the contract."""
+    from tracking.detector.mvq.checkpoint import restore_own_tree
     from tracking.train.mvq.checkpoint import save_final
+
     model, _, ema = _fixture()
-    save_final(tmp_path, model, ema, {"calibration": {}})
+    save_final(tmp_path, model, jax.tree.map(lambda v: v * 0.25, ema), {"calibration": {}})
     assert (tmp_path / "final").is_dir()
+    leaves = jax.tree.leaves(restore_own_tree(str(tmp_path / "final")))
+    assert leaves, "restore_own_tree found no array in final/"
+    assert all(np.allclose(np.asarray(v), 0.25) for v in leaves)
