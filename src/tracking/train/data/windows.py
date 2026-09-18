@@ -390,7 +390,7 @@ class WindowDataset:
 
     def behavior(self, i):
         """This window's behaviour category, from its own frameset."""
-        return self._fs_field(i, "behavior", "unknown")
+        return str(self._fs_field(i, "behavior", "unknown"))
 
     def weight(self, i):
         """Loss weight for this window."""

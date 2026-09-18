@@ -76,11 +76,17 @@ def test_non_negative_mass_splits_by_window_count():
 
 
 def test_each_source_is_balanced_separately():
-    ds = FakeDS(["human"] * 4 + ["pseudo"] * 4,
-                [True, False, False, False, True, True, True, False])
-    w, _ = mix_weights(ds, Cfg(), {"sources": {"human": {"kind": "human"},
-                                               "pseudo": {"kind": "pseudo"}}})
-    assert np.isclose(w[:4].sum(), w[4:].sum(), atol=1e-9)
+    """Each source's own female mass hits the target; global balancing pools them and cannot."""
+    female = [True, False, False, False, True, True, True, False]
+    ds = FakeDS(["human"] * 4 + ["pseudo"] * 4, female)
+    cfg = Cfg()
+    cfg.female_host_target = 0.5
+    manifest = {"sources": {"human": {"kind": "human"}, "pseudo": {"kind": "pseudo"}}}
+    w, mass = mix_weights(ds, cfg, manifest)
+    is_f = np.array(female)
+    a, b = slice(0, 4), slice(4, 8)
+    assert np.isclose(w[a][is_f[a]].sum() / mass["human"], 0.5, atol=1e-6)
+    assert np.isclose(w[b][is_f[b]].sum() / mass["pseudo"], 0.5, atol=1e-6)
 
 
 def test_negatives_frac_of_one_raises():

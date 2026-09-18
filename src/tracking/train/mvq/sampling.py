@@ -18,23 +18,13 @@ def balanced_weights(ds, alpha, female_weight, female_host_weight=1.0,
                       female_host_target=None, label=None):
     """Per-window sampling weights, normalised to sum 1.
 
-    `female_weight` (P2) multiplies female-host windows INSIDE the
-    behaviour-category balance, so how much of the sampled mass it actually buys
-    depends on how the categories fall out. `female_host_weight` (P3b) multiplies
-    them again on the FINAL normalised weights, so the mass ratio it produces is
-    exactly `female_host_weight x (mass_F / mass_M)`.
-
-    `female_host_target` (v2) SOLVES that multiplier instead of taking it on
-    faith: given this dataset's own post-balance female mass `f`, the multiplier
-    that lands the female-host mass exactly on `target` is
-    `target*(1-f) / ((1-target)*f)`. A hand-tuned `female_host_weight` is only
-    correct for the ONE census it was solved on, and per-source balancing
-    applies it PER SOURCE, where each source has its own census, so a single
-    hand number stacks into whatever the sources happen to average out to.
-    When `female_host_target` is set it wins and `female_host_weight` is unused.
-    A source with no female host (or no male/other host) cannot reach any
-    interior target at all: the multiplier stays 1.0 and a note is printed
-    naming `label`.
+    `female_weight` multiplies female-host windows inside the behaviour-category
+    balance; `female_host_weight` multiplies them again on the final weights.
+    `female_host_target`, when set, SOLVES that multiplier instead: given the
+    post-balance female mass `f`, `target*(1-f) / ((1-target)*f)` lands the
+    female-host mass exactly on `target`, and `female_host_weight` is unused.
+    A source with no female (or no male/other) host cannot reach any interior
+    target; the multiplier stays 1.0 and a note prints, naming `label`.
     """
     is_f = np.array([ds.is_female(i) for i in range(len(ds))], bool)
     cats = [f"{ds.behavior(i)}_{'female' if is_f[i] else 'other'}" for i in range(len(ds))]
@@ -49,11 +39,8 @@ def balanced_weights(ds, alpha, female_weight, female_host_weight=1.0,
             raise ValueError(f"female_host_target must be strictly between 0 and 1, got {t}")
         f = float(w[is_f].sum())
         who = f"[mvq] {label or getattr(ds, 'root', 'train set')}"
-        # One-sided by COUNT first (exact), then by mass with a tolerance: an
-        # all-female source's `f` comes back as 0.9999999999999998, not 1.0, and
-        # a bare `f >= 1.0` would sail past it and "solve" a multiplier of 4e-16
-        # -- which reads as a legitimate number in the log and would zero out the
-        # female mass of any source that is merely NEARLY one-sided.
+        # Count first (exact), then mass with tolerance: an all-female source's `f` is
+        # 0.9999999999999998, not 1.0, and a bare `f >= 1.0` would miss it and solve ~4e-16.
         n_f = int(is_f.sum())
         one_sided = n_f == 0 or n_f == len(is_f) or f <= 1e-9 or f >= 1.0 - 1e-9
         if one_sided:
