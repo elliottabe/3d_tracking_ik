@@ -5,8 +5,9 @@ defaults:
   - _self_
   - paths: hyak
   - model: mvq
-  - train: mvq
   - aug: default
+  - loss: default
+  - train: mvq
 
 run:
   name: ???

@@ -1,0 +1,19 @@
+# LossWeights defaults (src/tracking/train/mvq/losses.py). `conf` is the lambda
+# inside term 5's own formula, not an outer weight. `other_fly_repulsion` is
+# 0-is-OFF and active on any F>1 batch -- see configs/loss/mvq_v2.yaml.
+reproj: 1.0
+l3d: 0.5
+uv2d: 0.5
+vis: 0.1
+conf: 0.2
+exist: 1.0
+sex: 0.5
+rep: 0.5
+other_fly_repulsion: 0.0
+pass1: 0.5
+aux: 0.3
+huber_px: 8.0
+rep_px: 20.0
+rep_units: 2.5
+persist: 0.5
+persist_margin_units: 2.0

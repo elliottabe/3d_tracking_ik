@@ -1,0 +1,6 @@
+# v2 loss weights: cross-fly repulsion ON, as the shipped v2 checkpoint
+# trained (mvq_t2_v2_20260906d/mvq_run.json). Selected by train=mvq_v2.
+defaults:
+  - default
+
+other_fly_repulsion: 20.0

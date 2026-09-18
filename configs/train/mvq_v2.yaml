@@ -3,6 +3,9 @@
 # with (configs/mvq/v2.yaml is the matching inference config).
 defaults:
   - mvq
+  # `@_global_.loss`, not a bare `/loss`: a nested defaults list inherits this
+  # config's own package (`train`), so `/loss` would resolve to `train.loss`.
+  - override /loss@_global_.loss: mvq_v2
 
 warmup_steps: 1000
 total_steps: 40000
@@ -17,3 +20,5 @@ copy_paste_contact_sep: [4.0, 25.0]
 wing_kp_mult: 2.0
 loader_workers: processes
 num_workers: 24
+save_every: 2000
+val_cohorts: [female, two_fly, contact_pair, single_fly]
