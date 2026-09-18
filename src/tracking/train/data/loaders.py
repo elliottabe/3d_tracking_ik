@@ -109,9 +109,32 @@ _WORKER_DS = {}
 _NO_GPU_ENV = {"JAX_PLATFORMS": "cpu", "CUDA_VISIBLE_DEVICES": ""}
 
 
+def pin_cv2_threads() -> None:
+    """Pin OpenCV to one thread in the calling process.
+
+    The sample loader already parallelises across processes (this pool) or
+    threads (`windows.window_batches`); cv2's own thread pool -- 32 here --
+    would otherwise fan out inside each worker on top of that, oversubscribing
+    the node. `cv2.setNumThreads(0)` disables cv2 threading rather than
+    restoring its default, so it is not a substitute for this.
+    """
+    import cv2
+
+    cv2.setNumThreads(1)
+
+
+def _cv2_num_threads() -> int:
+    """`cv2.getNumThreads()` in the calling process. For tests: lets a caller
+    observe pinning from inside a spawned worker, not just assume it."""
+    import cv2
+
+    return cv2.getNumThreads()
+
+
 def _init_worker(specs):
     for k, v in _NO_GPU_ENV.items():
         os.environ.setdefault(k, v)
+    pin_cv2_threads()
     global _WORKER_DS
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
         _WORKER_DS = {k: build_dataset(s) for k, s in specs.items()}

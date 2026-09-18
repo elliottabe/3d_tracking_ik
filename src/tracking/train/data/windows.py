@@ -774,6 +774,9 @@ def window_batches(
     `workers`:
       "threads"   -- a `ThreadPoolExecutor` inside this process. Fine while
                      the Python half of `__getitem__` is not the bottleneck.
+                     cv2 is pinned to one thread process-wide first, since
+                     cv2's threads would otherwise fan out per-thread on top
+                     of this pool.
       "processes" -- a spawn `ProcessSampleLoader`
                      (`tracking.train.data.loaders`), for when sample
                      assembly is GIL-bound. Batches are byte-identical to the
@@ -814,6 +817,9 @@ def window_batches(
         return
     if workers != "threads":
         raise ValueError(f"workers must be 'threads' or 'processes', got {workers!r}")
+    from tracking.train.data.loaders import pin_cv2_threads
+
+    pin_cv2_threads()
     tpool = ThreadPoolExecutor(max_workers=max(1, num_workers))
     drained = False
     note = getattr(ds, "note_drawn", None)
