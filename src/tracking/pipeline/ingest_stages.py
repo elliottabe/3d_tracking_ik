@@ -61,6 +61,7 @@ def sex_json_for(index_csv, recording: str) -> dict[str, Any] | None:
 
 
 def _write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2))
     os.replace(tmp, path)
@@ -100,14 +101,19 @@ def ingest3d_recording(
     for bout in todo:
         kp3d, conf3d = by_bout[bout.idx]
         bout_dir = _bout_dir(bout.idx)
+        # sex.json before kp3d.npz: `todo` above keys the resume check on
+        # fly0/kp3d.npz, so it must be the LAST artifact written. A crash or
+        # preemption between the two must leave a bout that still looks
+        # incomplete (no kp3d.npz yet), not one that resume treats as done
+        # and skips forever with no sex.
+        if sex is not None:
+            _write_json(bout_dir / "sex.json", sex)
         save_npz(
             bout_dir / "fly0" / "kp3d.npz",
             arrays={"kp3d": np.asarray(kp3d), "conf3d": np.asarray(conf3d)},
             kp=order,
             cams=None,
         )
-        if sex is not None:
-            _write_json(bout_dir / "sex.json", sex)
 
     return {
         "run_root": str(run_root),

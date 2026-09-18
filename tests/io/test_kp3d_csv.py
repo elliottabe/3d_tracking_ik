@@ -89,3 +89,9 @@ def test_kp_order_naming_an_absent_keypoint_refuses(tmp_path):
     csv = _write_csv(tmp_path / "data3D.csv", 5)
     with pytest.raises(OrderMismatch):
         read_bout_kp3d(csv, [_bout(1, 0, 2)], kp_order=Order(["Scutellum", "T1L_TaTip"]))
+
+
+def test_header_only_csv_names_the_file_not_pandas_jargon(tmp_path):
+    csv = _write_csv(tmp_path / "data3D.csv", 0)
+    with pytest.raises(ValueError, match=r"data3D\.csv: header present but no data rows"):
+        read_bout_kp3d(csv, [_bout(1, 0, 2)], kp_order=Order(KPS))

@@ -1,6 +1,7 @@
 """Slicing a whole-recording 3D CSV into the per-bout artifacts the pipeline reads."""
 
 import numpy as np
+import pytest
 
 from tracking.io.bouts import BoutSpec
 from tracking.io.names import Order
@@ -107,6 +108,45 @@ def test_ingest_writes_sex_json_beside_each_bout(tmp_path):
 
     written = json.loads((run_root / "bouts" / "bout_00001" / "sex.json").read_text())
     assert fly_sex_label(written, 0) == "female"
+
+
+def test_crash_between_sex_and_kp3d_reprocesses_the_bout(tmp_path):
+    """kp3d.npz is the resume sentinel; a bout with only sex.json must re-run."""
+    csv = _csv(tmp_path / "data3D.csv", 50)
+    index = tmp_path / "index.csv"
+    index.write_text("flyID,sex,,amp\n1,f,rec1,T1L\n")
+    run_root = tmp_path / "run"
+    bout_dir = run_root / "bouts" / "bout_00001"
+
+    # Simulate a preemption that landed sex.json but never reached kp3d.npz.
+    bout_dir.mkdir(parents=True)
+    (bout_dir / "sex.json").write_text('{"identity": "sex", "sex_by_fly": {"0": "male"}}')
+
+    result = ingest3d_recording(
+        run_root,
+        spec=_Spec(csv, index_csv=index),
+        kp_order=Order(KPS),
+        bouts=[BoutSpec(1, 10, 12, 3, "summary")],
+    )
+
+    assert result["n_written"] == 1
+    assert result["n_skipped"] == 0
+    assert (bout_dir / "fly0" / "kp3d.npz").exists()
+    import json
+
+    written = json.loads((bout_dir / "sex.json").read_text())
+    assert fly_sex_label(written, 0) == "female"  # overwritten by the fresh run
+
+
+def test_fine_and_ingest3d_together_are_refused(tmp_path):
+    """Both write kp3d.npz and sex.json -- they are ALTERNATIVE entries, not composable."""
+    from omegaconf import OmegaConf
+
+    cfg = OmegaConf.create(
+        {"run": {"root": str(tmp_path)}, "recording": {"name": "rec1", "num_animals": 1}}
+    )
+    with pytest.raises(ValueError, match="both 'fine' and 'ingest3d'"):
+        resolve(cfg, stages=["fine", "ingest3d"])
 
 
 def test_ingest3d_is_registered_and_plannable(tmp_path):

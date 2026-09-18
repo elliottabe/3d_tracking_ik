@@ -51,3 +51,18 @@ def test_rigged_spec_still_requires_its_calib_dir(tmp_path):
     assert spec.has_rig is True
     with pytest.raises(ValueError, match="calib_dir does not exist"):
         spec.validate()
+
+
+def test_missing_calib_dir_key_raises_not_inferred_as_rigless(tmp_path):
+    """Omitting calib_dir is a config bug, not a declaration of rigless."""
+    cfg = _cfg(tmp_path)
+    del cfg["calib_dir"]
+    with pytest.raises(ValueError, match="has no calib_dir key"):
+        RecordingSpec.from_config(cfg)
+
+
+def test_calib_dir_null_still_declares_rigless(tmp_path):
+    """`calib_dir: null` remains the one and only way to opt out of a rig."""
+    spec = RecordingSpec.from_config(_cfg(tmp_path, calib_dir=None))
+    assert spec.calib_dir is None
+    assert spec.has_rig is False

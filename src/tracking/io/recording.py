@@ -24,9 +24,28 @@ class RecordingSpec:
 
     @classmethod
     def from_config(cls, cfg) -> RecordingSpec:
+        def _has(key):
+            return key in cfg if hasattr(cfg, "get") else hasattr(cfg, key)
+
         def _opt(key):
             value = cfg.get(key, None) if hasattr(cfg, "get") else getattr(cfg, key, None)
             return Path(value) if value is not None else None
+
+        if hasattr(cfg, "get"):
+            name = str(cfg.get("name", "<unnamed>"))
+        else:
+            name = str(getattr(cfg, "name", "<unnamed>"))
+
+        # calib_dir must be a DECLARED property: `null` is the one way to opt
+        # out of a rig, and omitting the key entirely is a config bug, not a
+        # rigless recording. Before this branch Path(cfg.calib_dir) raised on
+        # a missing key; cfg.get(key, None) silently made the two the same.
+        if not _has("calib_dir"):
+            raise ValueError(
+                f"recording {name!r} has no calib_dir key; it must be declared, "
+                "as either a path or `null` (null opts out of a rig -- "
+                "omitting the key does not)"
+            )
 
         fps = cfg.get("fps", None) if hasattr(cfg, "get") else getattr(cfg, "fps", None)
         if fps is None or not (float(fps) > 0):

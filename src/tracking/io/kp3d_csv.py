@@ -80,15 +80,19 @@ def read_bout_kp3d(
 
     parts: dict[int, list[np.ndarray]] = {idx: [] for idx in wanted}
     n_rows = 0
-    for chunk in pd.read_csv(path, skiprows=2, header=None, chunksize=chunksize, dtype=np.float64):
-        first, last = int(chunk.index[0]), int(chunk.index[-1])
-        n_rows += len(chunk)
-        if last < lo or first > hi:
-            continue
-        for idx, (start, end) in wanted.items():
-            if end < first or start > last:
+    try:
+        chunks = pd.read_csv(path, skiprows=2, header=None, chunksize=chunksize, dtype=np.float64)
+        for chunk in chunks:
+            first, last = int(chunk.index[0]), int(chunk.index[-1])
+            n_rows += len(chunk)
+            if last < lo or first > hi:
                 continue
-            parts[idx].append(chunk.loc[max(start, first) : min(end, last)].to_numpy())
+            for idx, (start, end) in wanted.items():
+                if end < first or start > last:
+                    continue
+                parts[idx].append(chunk.loc[max(start, first) : min(end, last)].to_numpy())
+    except pd.errors.EmptyDataError:
+        raise ValueError(f"{path}: header present but no data rows") from None
 
     out: dict[int, tuple[np.ndarray, np.ndarray]] = {}
     for idx, (start, end) in wanted.items():
@@ -100,5 +104,10 @@ def read_bout_kp3d(
                 f"file yielded {got.shape[0]}; the file has {n_rows} frames"
             )
         block = got.reshape(want, n_file_kp, 4)
+        # block[:, perm, :3] mixes advanced indexing (perm) with basic
+        # indexing (:3): the result is a view onto a TEMPORARY array, not
+        # onto `block` (its .flags.owndata is False, .base is not None, and
+        # that is version-dependent NumPy behaviour, not a guarantee). The
+        # .copy() detaches the returned array from that temporary.
         out[idx] = (block[:, perm, :3].copy(), block[:, perm, 3].copy())
     return out

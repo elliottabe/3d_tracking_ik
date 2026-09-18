@@ -1,11 +1,13 @@
 """Scoring a bout that never had 2D to reproject against."""
 
+import json
+
 import numpy as np
 
 from tracking.detector.coarse import FloorPlane
 from tracking.io.names import Order
 from tracking.qc.bout import bout_qc
-from tracking.qc.session import _blank_row, write_scorecard
+from tracking.qc.session import _row_from_qc, write_scorecard
 
 KPS = ["Scutellum", "WingL_base", "WingR_base", "Antenna_Base", "Abd_tip", "Abd_A4"]
 
@@ -58,13 +60,29 @@ def test_rigless_posture_flags_nothing_on_residuals():
 
 
 def test_scorecard_tolerates_a_missing_reproj_ratio(tmp_path):
-    # _blank_row exists for exactly this: every metric None, status carried.
-    rows = [_blank_row("bout_00001", 0, "female", "ok")]
-    assert rows[0].reproj_ratio is None
+    """A REAL rigless report through `_row_from_qc`, not `_blank_row`'s own definition."""
+    kp = _pose()
+    report = bout_qc(
+        kp2d=None,
+        conf2d=None,
+        kp3d_raw=kp,
+        conf3d=np.full(kp.shape[:2], 0.9),
+        fitted_world=kp,
+        kp_order=Order(KPS),
+        rig=None,
+        floor=_floor(),
+        sex="female",
+    )
 
-    report = write_scorecard(
-        tmp_path, rows, json_path=tmp_path / "qc.json", md_path=tmp_path / "qc.md"
+    row = _row_from_qc("bout_00001", 0, "female", report, "ok")
+    assert row.reproj_ratio is None
+
+    scorecard = write_scorecard(
+        tmp_path, [row], json_path=tmp_path / "qc.json", md_path=tmp_path / "qc.md"
     )
     assert (tmp_path / "qc.json").exists()
     assert (tmp_path / "qc.md").exists()
-    assert report is not None
+    assert scorecard is not None
+
+    on_disk = json.loads((tmp_path / "qc.json").read_text())
+    assert on_disk["by_sex"]["female"]["median_reproj_ratio"] is None

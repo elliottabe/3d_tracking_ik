@@ -112,14 +112,21 @@ RESOURCE_FLAGS=(
     "--partition=$(_y partition)" "--account=$(_y account)"
     "--time=$(_y time)" "--cpus-per-task=$(_y cpus_per_task)" "--mem=$(_y mem)"
 )
-[ -n "$(_y gres)" ]       && RESOURCE_FLAGS+=("--gres=$(_y gres)")
-[ -n "$(_y constraint)" ] && RESOURCE_FLAGS+=("--constraint=$(_y constraint)")
-[ -n "$(_y exclude)" ]    && RESOURCE_FLAGS+=("--exclude=$(_y exclude)")
+# `|| true`: under `set -euo pipefail`, each of these lines is safe today only
+# because more commands follow it -- a failing `[ -n ... ]` test on the LAST
+# command of the script would exit the script with status 1. That safety is
+# accidental, not structural: a future reorder that moved one of these to the
+# end would turn a missing/false key into a silent non-submission instead of
+# just skipping the optional flag. `|| true` makes each line's exit status
+# independent of position.
+[ -n "$(_y gres)" ]       && RESOURCE_FLAGS+=("--gres=$(_y gres)") || true
+[ -n "$(_y constraint)" ] && RESOURCE_FLAGS+=("--constraint=$(_y constraint)") || true
+[ -n "$(_y exclude)" ]    && RESOURCE_FLAGS+=("--exclude=$(_y exclude)") || true
 # ckpt-all is preemptible and its profile sets `requeue: true`; without this a
 # preempted array task is simply lost. session_pipeline.sh does the same
 # (`if slurm_cfg.get("requeue")`). Compared against "true" rather than tested
 # for non-emptiness so that `requeue: false` does NOT add the flag.
-[ "$(_y requeue)" = "true" ] && RESOURCE_FLAGS+=("--requeue")
+[ "$(_y requeue)" = "true" ] && RESOURCE_FLAGS+=("--requeue") || true
 
 # -- VERIFIED FACT 1, copied from session_pipeline.sh: `module load cuda` alone
 #    measurably leaves JAX on cpu on this cluster; the env's own bundled wheels

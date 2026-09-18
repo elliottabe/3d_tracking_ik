@@ -104,6 +104,14 @@ def resolve(cfg, *, stages, bout_ids=None) -> tuple[Work, ...]:
             "'(alt)'); running both means the second silently overwrites the "
             "first. Pick one."
         )
+    if {"fine", "ingest3d"} <= set(stage_names):
+        raise ValueError(
+            "stages contains both 'fine' and 'ingest3d' -- they are ALTERNATIVE "
+            "entries and both write kp3d.npz and sex.json (the registry marks "
+            "'ingest3d' a peer of 'fine'); running both means ordered() places "
+            "'ingest3d' second and it silently overwrites 'fine's output. Pick "
+            "one."
+        )
 
     registry_order = list(ordered(stage_names))  # raises KeyError naming the valid stages
 
