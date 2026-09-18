@@ -1,0 +1,14 @@
+# Hydra root for MVQ training.
+#
+#   python -m tracking.train.mvq.run train=mvq_v2 run.name=my_run
+defaults:
+  - _self_
+  - paths: hyak
+  - model: mvq
+  - aug: default
+  - loss: default
+  - train: mvq
+
+run:
+  name: ???
+  seed: 0

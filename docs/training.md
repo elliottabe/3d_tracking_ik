@@ -211,3 +211,91 @@ Dereferenced, maskless (spec §5.4):
 | **unified** | **36,830** | **210,609** | **~44 G** |
 
 Mask sidecars add ~18 G (2.2 G human + 16 G p3b).
+
+## MVQ training
+
+Entry point: `python -m tracking.train.mvq` (also `python -m tracking.train.mvq.run`).
+Hydra config: `configs/train.yaml` (`run.name`, `paths`) plus the `model`,
+`train`, `aug` and `loss` groups. Code: `src/tracking/train/`.
+
+```bash
+# the v2 preset on the unified root, run dir <paths.runs_root>/<run.name>
+PYTHONPATH=$PWD/src python -m tracking.train.mvq train=mvq_v2 paths=hyak run.name=mvq_t2_v2
+
+# a different root, and a 2-step plumbing check that writes a real run dir
+PYTHONPATH=$PWD/src python -m tracking.train.mvq train=mvq_v2 run.name=smoke \
+  paths.train_data_root=/path/to/unified_v2 train.smoke=true train.total_steps=2 \
+  train.batch_size=2 train.window_lengths=[1] train.loader_workers=threads
+```
+
+`PYTHONPATH=$PWD/src` is only needed when the environment's editable install
+points at a different checkout; with this checkout installed it can be dropped.
+
+### The v2 preset
+
+`configs/train/mvq_v2.yaml` (on top of `configs/train/mvq.yaml`) is what the
+shipped v2 checkpoint trained with:
+
+| key | value | meaning |
+| --- | --- | --- |
+| `total_steps` / `warmup_steps` | 40000 / 1000 | AdamW, warmup + cosine decay |
+| `window_lengths` | `[1, 2]` | one stream per T, alternating by step |
+| `pair_deltas` | `[1, 4, 16]` | frame spacings a T=2 window may span |
+| `jitter_units` | 10.0 | crop-centre jitter |
+| `female_host_target` | 0.5 | solved per source; `female_host_weight` unused while set |
+| `copy_paste_p` | 0.8 | second fly pasted in; without `paths.masks_root` the run prints and continues with uncut donors |
+| `copy_paste_contact_p` / `_sep` | 0.7 / `[4.0, 25.0]` | how often, and how close |
+| `wing_kp_mult` | 2.0 | per-keypoint loss multiplier on wing landmarks |
+| `loader_workers` / `num_workers` | `processes` / 24 | one spawn pool shared by both T streams |
+| `save_every` | 2000 | checkpoint interval (`max_to_keep=3`) |
+| `val_cohorts` | `[female, two_fly, contact_pair, single_fly]` | the four acceptance cohorts; each must be non-empty or the run fails at startup |
+
+It also selects `loss=mvq_v2`, which is `configs/loss/default.yaml` with
+`other_fly_repulsion: 20.0` -- the cross-fly repulsion term is gated on
+`w.other_fly_repulsion > 0`, so at the `LossWeights` default of 0 it is never
+traced. Composing with no `loss` group at all still works and warns, naming
+the defaults it fell back to.
+
+Sampling is source-aware: negatives take `negatives_frac` of the mass, the
+rest splits by window count, and each source's own behaviour/host-sex balance
+is restored inside it. The behaviour axis is **inert on `unified_v2`** -- no
+frameset there carries a `behavior` field, so every window's category is
+`unknown` and the balance reduces to host-sex. A window's loss weight is its
+own frameset's `weight` field (resolved frameset -> recording -> root default, never from
+`manifest.sources`, which records the tier's declared weight independently);
+`train.pseudo_weight` is checked against the realised per-source mean and
+**warns** on disagreement, training at the framesets' value.
+
+`train.warm_start` starts from someone else's weights: it takes a flat
+checkpointer directory, i.e. another run's `final/`, NOT a run dir. Leaves
+whose path or shape does not match are kept at fresh init and named on stdout.
+It is skipped, with a printed reason, when this run's own `ckpt/` already has a
+step -- resume beats warm start.
+
+`train.smoke=true` is a plumbing check, not a short run: it skips cohort
+validation, every evaluation and the temperature fit (`calibration` stays at
+the identity `1.0`), and it may shard over a subset of the visible devices when
+`batch_size` does not divide over all of them. Everything else -- dataset,
+sampler, augmentation, step, `ckpt/`, `final/` -- is the real thing.
+
+### Run layout
+
+```
+<paths.runs_root>/<run.name>/
+  mvq_run.json          resolved model/train/loss/aug config, keypoint_names,
+                        train_data (per-source mass + realised mix), val, calibration
+  ckpt/<step>/          model, opt, ema, ema_meta -- resumable; a rerun of the
+                        same run.name picks up from the latest step
+  final/                debiased EMA weights + a copy of mvq_run.json
+```
+
+`tracking.detector.mvq.checkpoint.load_mvq_model` reads both: the run dir with
+`step=<n>`/`"latest"`, or `<run_dir>/final` with `step=None`. Evaluation runs
+every `train.eval_every` steps and once at the end; the final pass also fits
+the existence/visibility temperatures written to `mvq_run.json["calibration"]`,
+which `MVQRunner` divides its logits by (`1.0` is the identity). That block
+also records `n_val`, and a fit that saturates the bounded search prints a
+warning naming which of the two it was. The whole final pass -- evaluation,
+calibration -- is guarded: a failure there still writes `final/`. A relaunch
+of the same `run.name` rewrites the run-root `mvq_run.json` at startup but
+KEEPS an earlier `calibration`/`val`, which the `step=<n>` loader reads.

@@ -146,6 +146,8 @@ class WindowDataset:
         center_shift_units=0.0,
         sex_overrides=None,
         masks_root=None,
+        aug=None,
+        lr_swap=None,
     ):
         self.root, self.split, self.T = root, split, int(T)
         self.max_flies, self.jitter, self.train = int(max_flies), float(jitter_units), bool(train)
@@ -155,6 +157,10 @@ class WindowDataset:
         self.copy_paste = copy_paste
         self.masks_root = masks_root
         self.epoch = 0
+        if aug is not None and lr_swap is None:
+            raise ValueError("aug requires lr_swap (the mirror op needs the swap table)")
+        self.aug = aug
+        self.lr_swap = None if lr_swap is None else np.asarray(lr_swap)
 
         coco = schema.load_instances(root, split)
         self.manifest_root = schema.load_manifest(root)
@@ -310,6 +316,8 @@ class WindowDataset:
             center_shift_units=float(self.center_shift),
             sex_overrides={r: dict(m) for r, m in self.sex_overrides.items()},
             masks_root=self.masks_root,
+            aug=self.aug,
+            lr_swap=self.lr_swap,
         )
 
     def window_index(self, rec, fly, f0, delta=None):
@@ -375,6 +383,14 @@ class WindowDataset:
     def source(self, i):
         """`"real"` | `"pseudo"`: this window's provenance."""
         return str(self._fs_field(i, "source", "real"))
+
+    def source_id(self, i):
+        """This window's tier id, from its own frameset."""
+        return str(self._fs_field(i, "source_id", "unknown"))
+
+    def behavior(self, i):
+        """This window's behaviour category, from its own frameset."""
+        return str(self._fs_field(i, "behavior", "unknown"))
 
     def weight(self, i):
         """Loss weight for this window."""
@@ -708,8 +724,14 @@ class WindowDataset:
         rejects every donor, falls through to `_build(i)`. The RNG seed's
         trailing `7` separates this draw from `_build`'s own jitter draw
         (same `seed`/`i`/`epoch`) so the two do not correlate.
+
+        When `aug` is set and `train` is True, `augment_window` runs on
+        whatever sample results, seeded with a trailing `11` -- a third
+        stream, independent of both the jitter (no suffix) and copy-paste
+        (`7`) draws above.
         """
         p = self.copy_paste
+        sample = None
         if (
             p is not None
             and self.train
@@ -720,10 +742,17 @@ class WindowDataset:
                 np.random.SeedSequence([self.seed, int(i), int(self.epoch), 7])
             )
             if rng.uniform() < p.p:
-                out = self.paste_window(i, rng)
-                if out is not None:
-                    return out
-        return self._build(i)
+                sample = self.paste_window(i, rng)
+        if sample is None:
+            sample = self._build(i)
+        if self.aug is not None and self.train:
+            from tracking.train.data.augment import augment_window
+
+            rng = np.random.default_rng(
+                np.random.SeedSequence([self.seed, int(i), int(self.epoch), 11])
+            )
+            sample = augment_window(sample, self.aug, rng, self.lr_swap)
+        return sample
 
 
 def window_batches(
@@ -745,6 +774,9 @@ def window_batches(
     `workers`:
       "threads"   -- a `ThreadPoolExecutor` inside this process. Fine while
                      the Python half of `__getitem__` is not the bottleneck.
+                     cv2 is pinned to one thread process-wide first, since
+                     cv2's threads would otherwise fan out per-thread on top
+                     of this pool.
       "processes" -- a spawn `ProcessSampleLoader`
                      (`tracking.train.data.loaders`), for when sample
                      assembly is GIL-bound. Batches are byte-identical to the
@@ -785,11 +817,19 @@ def window_batches(
         return
     if workers != "threads":
         raise ValueError(f"workers must be 'threads' or 'processes', got {workers!r}")
+    from tracking.train.data.loaders import pin_cv2_threads
+
+    pin_cv2_threads()
     tpool = ThreadPoolExecutor(max_workers=max(1, num_workers))
     drained = False
+    note = getattr(ds, "note_drawn", None)
     try:
         for s in starts:
-            samples = list(tpool.map(ds.__getitem__, [int(i) for i in idx[s : s + batch_size]]))
+            bidx = [int(i) for i in idx[s : s + batch_size]]
+            samples = list(tpool.map(ds.__getitem__, bidx))
+            if note is not None:
+                for i in bidx:
+                    note(i)
             yield {k: np.stack([smp[k] for smp in samples]) for k in WINDOW_KEYS}
         drained = True
     finally:

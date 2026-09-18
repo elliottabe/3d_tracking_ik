@@ -229,7 +229,7 @@ def _photometric(sample, params: MVAugParams, rng):
 
     if params.noise_scale > 0:
         scale = rng.uniform(0.0, params.noise_scale, size=(N, 1, 1, 1)).astype(np.float32)
-        flat = np.clip(flat + rng.normal(size=flat.shape).astype(np.float32) * scale, 0.0, 1.0)
+        flat = np.clip(flat + rng.standard_normal(flat.shape, dtype=np.float32) * scale, 0.0, 1.0)
 
     if params.pc_color > 0:
         f = rng.uniform(1 - params.pc_color, 1 + params.pc_color, size=(N, 1, 1, 3)).astype(

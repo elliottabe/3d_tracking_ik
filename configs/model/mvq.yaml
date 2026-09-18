@@ -1,0 +1,29 @@
+# MVQConfig defaults (src/tracking/detector/mvq/model.py) -- the same
+# architecture the shipped v2 checkpoint (configs/mvq/v2.yaml) was trained
+# with. attn_impl is cudnn here (GPU flash attention for training); unit
+# tests build MVQConfig(attn_impl="xla") directly to run on CPU.
+crop: 448
+patch: 16
+embed_dim: 768
+num_keypoints: 50
+num_cameras: 7
+max_frames: 8
+n_instances: 4
+n_local: 2
+n_global: 2
+global_pool: 2
+dec_layers_3d: 8
+dec_layers_2d: 4
+dec_heads: 12
+mlp_ratio: 4.0
+refine_passes: 1
+patch_rgb: 9
+fourier_bands: 8
+roi_scale: 24.0
+camera_slot_embed: true
+backbone: dinov3_b16
+backbone_depth: null
+backbone_heads: null
+remat: true
+q_chunk: null
+attn_impl: cudnn
