@@ -243,16 +243,30 @@ shipped v2 checkpoint trained with:
 | `pair_deltas` | `[1, 4, 16]` | frame spacings a T=2 window may span |
 | `jitter_units` | 10.0 | crop-centre jitter |
 | `female_host_target` | 0.5 | solved per source; `female_host_weight` unused while set |
-| `copy_paste_p` | 0.8 | second fly pasted in, needs `paths.masks_root` |
+| `copy_paste_p` | 0.8 | second fly pasted in; without `paths.masks_root` the run prints and continues with uncut donors |
 | `copy_paste_contact_p` / `_sep` | 0.7 / `[4.0, 25.0]` | how often, and how close |
 | `wing_kp_mult` | 2.0 | per-keypoint loss multiplier on wing landmarks |
 | `loader_workers` / `num_workers` | `processes` / 24 | one spawn pool shared by both T streams |
 
 Sampling is source-aware: negatives take `negatives_frac` of the mass, the
 rest splits by window count, and each source's own behaviour/host-sex balance
-is restored inside it. A window's loss weight is its frameset's `weight` from
-`manifest.sources`; `train.pseudo_weight` is checked against it and **warns**
-on disagreement, training at the manifest's value.
+is restored inside it. A window's loss weight is its own frameset's `weight`
+field (resolved frameset -> recording -> root default, never from
+`manifest.sources`, which records the tier's declared weight independently);
+`train.pseudo_weight` is checked against the realised per-source mean and
+**warns** on disagreement, training at the framesets' value.
+
+`train.warm_start` starts from someone else's weights: it takes a flat
+checkpointer directory, i.e. another run's `final/`, NOT a run dir. Leaves
+whose path or shape does not match are kept at fresh init and named on stdout.
+It is skipped, with a printed reason, when this run's own `ckpt/` already has a
+step -- resume beats warm start.
+
+`train.smoke=true` is a plumbing check, not a short run: it skips cohort
+validation, every evaluation and the temperature fit (`calibration` stays at
+the identity `1.0`), and it may shard over a subset of the visible devices when
+`batch_size` does not divide over all of them. Everything else -- dataset,
+sampler, augmentation, step, `ckpt/`, `final/` -- is the real thing.
 
 ### Run layout
 

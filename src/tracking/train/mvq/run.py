@@ -95,30 +95,27 @@ def _mesh(tcfg):
     return Mesh(devices[:n], axis_names=("data",))
 
 
-def _source_table(manifest, tcfg) -> dict:
-    """`{source_id: {kind, manifest_weight}}` for the root's declared sources.
+def _source_table(manifest) -> dict:
+    """`{source_id: {kind, manifest_weight}}` for the root's declared sources."""
+    return {
+        sid: {
+            "kind": str(entry.get("kind", "unknown")),
+            "manifest_weight": float(entry.get("weight", 1.0)),
+        }
+        for sid, entry in sorted((manifest.get("sources") or {}).items())
+    }
 
-    A pseudo source whose manifest weight disagrees with `train.pseudo_weight`
-    WARNS and trains at the manifest's value: every window carries its own
-    frameset's weight as `sample_weight`, so the config number is a statement
-    about the data, not a knob that overrides it.
+
+def _mix_report(ds, tcfg, mass, sources) -> dict:
+    """Window count, sampled mass and mean `sample_weight` per source, for one T.
+
+    The weight that multiplies the loss is each FRAMESET's own `weight`
+    (`WindowDataset.weight` -> frameset, then recording, then root default --
+    never `manifest["sources"]`, which is an independent place on disk), so
+    that realised mean is what `train.pseudo_weight` is checked against. A
+    disagreement WARNS: the config number describes the data, it cannot
+    override it.
     """
-    table = {}
-    for sid, entry in sorted((manifest.get("sources") or {}).items()):
-        kind = str(entry.get("kind", "unknown"))
-        weight = float(entry.get("weight", 1.0))
-        table[sid] = {"kind": kind, "manifest_weight": weight}
-        if kind in PSEUDO_KINDS and abs(weight - float(tcfg.pseudo_weight)) > 1e-6:
-            print(
-                f"[mvq] WARNING {sid}: manifest weight {weight:g} != train.pseudo_weight "
-                f"{tcfg.pseudo_weight:g} -- training at the manifest's {weight:g}",
-                flush=True,
-            )
-    return table
-
-
-def _mix_report(ds, mass, sources) -> dict:
-    """Window count, sampled mass and mean `sample_weight` per source, for one T."""
     total = collections.defaultdict(float)
     n = collections.Counter()
     for i in range(len(ds)):
@@ -134,9 +131,16 @@ def _mix_report(ds, mass, sources) -> dict:
             "mean_sample_weight": float(mean_w),
         }
         kind = sources.get(sid, {}).get("kind", "unknown")
+        flag = ""
+        if kind in PSEUDO_KINDS and abs(mean_w - float(tcfg.pseudo_weight)) > 1e-6:
+            flag = (
+                f"  <-- WARNING: train.pseudo_weight={tcfg.pseudo_weight:g} disagrees; "
+                f"training at the framesets' {mean_w:.4f}"
+            )
         print(
             f"[mvq]   {sid}: kind={kind} windows={n[sid]} mass={mass[sid]:.4f} "
-            f"mean sample_weight={mean_w:.4f}",
+            f"manifest weight={sources.get(sid, {}).get('manifest_weight', float('nan')):g} "
+            f"mean sample_weight={mean_w:.4f}{flag}",
             flush=True,
         )
     return rows
@@ -211,7 +215,7 @@ def run_training(cfg) -> dict:
     mcfg = _dataclass(MVQConfig, cfg.model)
     aug = _dataclass(MVAugParams, cfg.get("aug"))
     weights = _dataclass(LossWeights, cfg.get("loss"))
-    if int(cfg.run.seed) != int(tcfg.seed):
+    if int(cfg.run.get("seed", tcfg.seed)) != int(tcfg.seed):
         print(
             f"[mvq] run.seed={int(cfg.run.seed)} is NOT used: train.seed={tcfg.seed} seeds the "
             f"model, the sampler and the loader",
@@ -248,7 +252,7 @@ def run_training(cfg) -> dict:
         wings = [n for n, w in zip(names, kp_weight, strict=True) if w != 1.0]
         print(f"[mvq] wing keypoint weight x{tcfg.wing_kp_mult} on {wings}", flush=True)
 
-    sources = _source_table(manifest, tcfg)
+    sources = _source_table(manifest)
     train_data = {"root": root, "masks_root": masks_root, "sources": sources, "mix": {}}
     prepared, counters = {}, {}
     for T in tcfg.window_lengths:
@@ -284,7 +288,7 @@ def run_training(cfg) -> dict:
         )
         train_data["mix"][str(int(T))] = {
             "n_windows": len(ds),
-            "sources": _mix_report(ds, mass, sources),
+            "sources": _mix_report(ds, tcfg, mass, sources),
         }
         # NOT a proxy: the counter hangs off the dataset, which stays a plain
         # WindowDataset so `worker_spec()` (the process loader) still works.
@@ -385,12 +389,9 @@ def run_training(cfg) -> dict:
     Ts = sorted(prepared)
     loss = float("nan")
     t0 = time.time()
-    # Realised host-sex ratio and source mix of what the sampler ACTUALLY draws
-    # over the first `RATIO_BATCHES` batches (or the whole run, if shorter -- a
-    # 2-step smoke run must report it too, or the plumbing is unverified). The
-    # counter tallies a window when the loader draws it, so `prefetch`'s
-    # run-ahead puts a few more in the tally than the steps taken; the count it
-    # was taken over is reported with it rather than assumed.
+    # What the sampler ACTUALLY draws over the first `RATIO_BATCHES` batches, or
+    # the whole run if shorter. The counter tallies at loader-draw time, so
+    # `prefetch`'s run-ahead adds a few; the tally's own count is reported.
     n_ratio = max(1, min(RATIO_BATCHES, tcfg.total_steps - start))
     seen_f = seen_n = seen_neg = 0
     for i in range(start, tcfg.total_steps):
@@ -412,7 +413,12 @@ def run_training(cfg) -> dict:
                 )
                 for T_, counter in sorted(counters.items()):
                     counts, drawn = counter.realised()
-                    realised = {sid: counts.get(sid, 0) / drawn for sid in sorted(counts)}
+                    # over the MASS table's sources, so one that dropped out of
+                    # the mix is recorded as 0.000 rather than going missing.
+                    realised = {
+                        sid: counts.get(sid, 0) / drawn
+                        for sid in sorted(train_data["mix"][str(T_)]["sources"])
+                    }
                     train_data["mix"][str(T_)]["realised"] = realised
                     train_data["mix"][str(T_)]["realised_windows_drawn"] = int(drawn)
                     print(
@@ -444,9 +450,8 @@ def run_training(cfg) -> dict:
                 kp_weight=kp_weight,
             )
             print("  val " + " ".join(f"{k}={v:.4f}" for k, v in val.items()), flush=True)
-            # `del em` alone frees nothing (its arrays alias `ema`'s buffers);
-            # clearing the caches is what discards eval's compiled forward,
-            # which otherwise fragments the pool until the next step OOMs.
+            # `del em` frees nothing alone (it aliases `ema`'s buffers); the
+            # cache clear is what stops eval's executable fragmenting the pool.
             del em
             jax.clear_caches()
         if (i + 1) % tcfg.save_every == 0:
@@ -473,7 +478,20 @@ def run_training(cfg) -> dict:
             kp_weight=kp_weight,
         )
         print("  val " + " ".join(f"{k}={v:.4f}" for k, v in val.items()), flush=True)
-        temps = _temperatures(em, val_ds, tcfg, mesh)
+        try:
+            temps = _temperatures(em, val_ds, tcfg, mesh)
+        except Exception as exc:  # noqa: BLE001 -- first runs after ~2 days of training
+            print(
+                f"[mvq] WARNING calibration failed ({exc!r}) -- writing the identity 1.0/1.0 "
+                f"and keeping the final checkpoint",
+                flush=True,
+            )
+    # `fit_temperature` searches a BOUNDED T; a saturated fit would otherwise
+    # divide MVQRunner's logits unremarked.
+    print(
+        f"[mvq] calibration: exist_temperature={temps[0]:.4f} vis_temperature={temps[1]:.4f}",
+        flush=True,
+    )
     meta["val"] = val
     _write_meta(run_dir, meta)
     write_calibration(run_dir, *temps)

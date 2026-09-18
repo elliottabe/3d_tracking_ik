@@ -15,7 +15,38 @@ def _skip_if_oom(exc):
     raise
 
 
+def _final_and_ema(run_dir):
+    """(final params, checkpoint EMA, ema_updates) read back off disk, keyed by
+    path -- the two trees `save_final` must differ by exactly the debias."""
+    import jax
+    import numpy as np
+    import orbax.checkpoint as ocp
+
+    from tracking.detector.mvq.checkpoint import restore_own_tree
+
+    mngr = ocp.CheckpointManager(
+        str(run_dir / "ckpt"),
+        options=ocp.CheckpointManagerOptions(read_only=True),
+        item_names=("model", "opt", "ema", "ema_meta"),
+    )
+    step = mngr.latest_step()
+    meta = mngr.restore(step, args=ocp.args.Composite(ema_meta=ocp.args.JsonRestore()))["ema_meta"]
+
+    def flat(tree):
+        return {
+            jax.tree_util.keystr(k): np.asarray(v)
+            for k, v in jax.tree_util.tree_flatten_with_path(tree)[0]
+        }
+
+    return (
+        flat(restore_own_tree(str(run_dir / "final"))),
+        flat(restore_own_tree(str(run_dir / "ckpt" / str(step) / "ema"))),
+        int(meta["ema_updates"]),
+    )
+
+
 def test_two_step_smoke_run_writes_a_checkpoint_and_a_manifest(tmp_path):
+    import numpy as np
     from hydra import compose, initialize_config_dir
 
     from tracking.train.mvq.run import run_training
@@ -50,10 +81,56 @@ def test_two_step_smoke_run_writes_a_checkpoint_and_a_manifest(tmp_path):
 
     on_disk = json.loads((run_dir / "mvq_run.json").read_text())
     assert on_disk["model"]["backbone"] == "dinov3_b16"
-    assert set(on_disk["calibration"]) == {"exist_temperature", "vis_temperature"}
+    # smoke skips the val pass, so calibration is the IDENTITY, never a fit.
+    assert on_disk["calibration"] == {"exist_temperature": 1.0, "vis_temperature": 1.0}
     assert (run_dir / "final" / "mvq_run.json").is_file()
     drawn = on_disk["train_data"]["mix"]["1"]["realised"]
+    assert set(drawn) == set(on_disk["train_data"]["mix"]["1"]["sources"])
     assert abs(sum(drawn.values()) - 1.0) < 1e-6
+
+    # `final/` must hold the DEBIASED EMA: `save_final` cannot debias, so
+    # handing it the raw zero-seeded accumulator would ship weights a factor
+    # `1 - decay**t` too small (~500x here) with nothing else to show for it.
+    final, ema, updates = _final_and_ema(run_dir)
+    common = sorted(set(final) & set(ema))
+    assert len(common) > 100
+    correction = 1.0 - float(on_disk["train"]["ema"]) ** updates
+    assert all(
+        np.allclose(final[k], ema[k] / correction, rtol=1e-4, atol=1e-5) for k in common
+    ), "final/ is not the debiased EMA"
+    assert not all(
+        np.allclose(final[k], ema[k], rtol=1e-4, atol=1e-5) for k in common
+    ), "final/ matches the RAW accumulator -- with_ema's debias was skipped"
+
+
+class _StubDS:
+    """Windows of one source, carrying the per-frameset weights given."""
+
+    def __init__(self, weights):
+        self._w = weights
+
+    def __len__(self):
+        return len(self._w)
+
+    def source_id(self, i):
+        return "pseudo_x"
+
+    def weight(self, i):
+        return self._w[i]
+
+
+def test_the_pseudo_weight_warning_reads_the_framesets_not_the_manifest(capsys):
+    from tracking.train.mvq.config import MVQTrainConfig
+    from tracking.train.mvq.run import _mix_report
+
+    # the manifest AGREES with the config, so a check against it would say nothing
+    sources = {"pseudo_x": {"kind": "pseudo", "manifest_weight": 0.3}}
+    tcfg = MVQTrainConfig(pseudo_weight=0.3)
+    rows = _mix_report(_StubDS([1.0, 1.0]), tcfg, {"pseudo_x": 1.0}, sources)
+    assert rows["pseudo_x"]["mean_sample_weight"] == 1.0
+    assert "WARNING" in capsys.readouterr().out
+    _mix_report(_StubDS([0.3, 0.3]), tcfg, {"pseudo_x": 1.0}, sources)
+    assert "WARNING" not in capsys.readouterr().out
 
 
 def test_the_module_entry_point_exists():
