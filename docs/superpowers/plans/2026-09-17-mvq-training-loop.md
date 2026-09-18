@@ -16,7 +16,16 @@
 
 ## Global Constraints
 
-- **Maskless.** No `prompt_mask` anywhere in `train/`. `prompt_on` is always all-`False`. `decoder.py:131` computes `add = self.prompt_proj(prompt_tok) * on[:, None]`, so `prompt_on=False` makes the prompt contribution exactly zero — numerically identical to v2, which trained at `prompt_p_start/end = 0.0`.
+- **Maskless.** No `prompt_mask` anywhere in `train/`. `prompt_on` is always all-`False`. Two separate
+  mechanisms, often conflated — both verified in the tree:
+  1. The prompt contribution is absent because `prompt_mask` is never supplied: `model.py:169-171` sets
+     `ptok = None`, and `decoder.py:129` gates the whole `add = prompt_proj(tok) * on[:, None]` block on
+     `if prompt_tok is not None:`, so it never executes. (In v2 at `prompt_p 0.0` the mask existed and the
+     same contribution multiplied to zero — different route, identical result.)
+  2. `prompt_on` must still be all-`False` because `losses.py:156` feeds it to `assign_slots`, and
+     `matching.py:32` does `slot = jnp.where((f == 0) & on, SLOT_PROMPTED, ...)` — a `True` would route the
+     host fly to `SLOT_PROMPTED` instead of its sex-typed slot and corrupt the existence and sex targets.
+  Citing only mechanism 1 (as this plan originally did) points a reader at dead code.
 - **Slot constants are imported, never redefined.** `SLOT_PROMPTED/FEMALE/MALE/OTHER`, `N_SLOTS`, `SEX_FEMALE/MALE/UNKNOWN`, `SEX_PRESENT_UNKNOWN` come from `tracking.detector.mvq.slots`. The final Plan 2 review ruled explicitly: Plan 3 must import them, not re-create the table in `matching.py`.
 - **One unified root.** No `pseudo_root`/`singlefly_root`/`negatives_root`, no `ConcatWindowDataset`. Per-frameset provenance is `source_id`, and tier identity comes from `manifest["sources"][source_id]["kind"]`.
 - **Never index keypoints or cameras by bare integer.** Keypoint order goes through `tracking.io.names.Order`; wing weighting is BY NAME (`wing_kp_weight`). Cameras resolve through `CameraRig`.
