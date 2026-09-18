@@ -388,6 +388,10 @@ class WindowDataset:
         """This window's tier id, from its own frameset."""
         return str(self._fs_field(i, "source_id", "unknown"))
 
+    def behavior(self, i):
+        """This window's behaviour category, from its own frameset."""
+        return self._fs_field(i, "behavior", "unknown")
+
     def weight(self, i):
         """Loss weight for this window."""
         return float(self._fs_field(i, "weight", 1.0))
@@ -812,9 +816,14 @@ def window_batches(
         raise ValueError(f"workers must be 'threads' or 'processes', got {workers!r}")
     tpool = ThreadPoolExecutor(max_workers=max(1, num_workers))
     drained = False
+    note = getattr(ds, "note_drawn", None)
     try:
         for s in starts:
-            samples = list(tpool.map(ds.__getitem__, [int(i) for i in idx[s : s + batch_size]]))
+            bidx = [int(i) for i in idx[s : s + batch_size]]
+            samples = list(tpool.map(ds.__getitem__, bidx))
+            if note is not None:
+                for i in bidx:
+                    note(i)
             yield {k: np.stack([smp[k] for smp in samples]) for k in WINDOW_KEYS}
         drained = True
     finally:
