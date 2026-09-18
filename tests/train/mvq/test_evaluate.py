@@ -67,24 +67,37 @@ def test_cohorts_on_the_real_root_are_non_empty():
     assert c["female"].any() and c["single_fly"].any()
 
 
+#: keys `evaluate()` legitimately returns as NaN on the `SMALL_REC` fixture,
+#: with the one-line reason each is excused from the finiteness check below.
+_EXPECTED_NAN = {
+    "exist_rec_slot0": ("SLOT_PROMPTED can only receive a positive existence target "
+                        "when prompt_on is True, and it is hardcoded False, so recall "
+                        "is undefined for every call to evaluate() in this codebase, "
+                        "not just this fixture."),
+    "exist_rec_slot2": "male never occurs in this all-female fixture recording.",
+    "exist_rec_slot3": "'other' never occurs in this all-female fixture recording.",
+}
+_ZERO_TWO_FLY_WINDOWS = "this recording has zero two-fly windows."
+_EXPECTED_NAN.update({k: _ZERO_TWO_FLY_WINDOWS for k in (
+    "cross_fly_frac", "cross_fly_frac_slot0", "cross_fly_frac_slot1",
+    "cross_fly_frac_slot2", "cross_fly_frac_slot3", "cross_fly_frac_female",
+    "cross_fly_frac_single_fly", "cross_fly_frac_two_fly", "cross_fly_frac_contact_pair",
+    "cross_fly_frac_group_A", "cohort_two_fly", "cohort_contact_pair",
+    "policy_miss_frac_two_fly", "policy_miss_frac_contact_pair",
+    "sex_acc_two_fly", "sex_acc_contact_pair",
+)})
+
+
 @pytest.mark.skipif(not os.path.isdir(ROOT), reason="unified root not present")
 def test_evaluate_end_to_end_with_a_ground_truth_stub():
-    """Runs the real `evaluate()` (forward/prefetch/sharding/policy/aggregation
-    path) against a real, single-recording `WindowDataset`, with a stub model
-    (not `MVQModel`) so the test is fast and immune to GPU memory pressure --
-    everything, including the mesh, runs on the CPU device explicitly.
+    """Runs the real `evaluate()` against a real single-recording `WindowDataset`.
 
-    `SMALL_REC` is single-fly and all-female, so `two_fly`/`contact_pair` are
-    this fixture's naturally zero-member cohorts (no need to fabricate an
-    extra all-False mask). This implementation's sentinel for a zero-member
-    cohort is NaN, present under its normal key (`cohort_two_fly`, etc.), not
-    an absent key or a crash -- asserted explicitly below.
-
-    The stub ignores crops/cam_valid/M/t_local and always reports the host
-    fly's OWN ground truth on every instance slot: that drives the oracle AND
-    policy MPJPE to exactly 0 (mvq_loss keys `mpjpe3d_units`, `mpjpe3d_mm`,
-    `mpjpe3d_policy_units`), which is the assertion that proves the metric is
-    wired to the labels rather than merely returning a plausible number.
+    The stub feeds the host fly's own GT as every instance's `xyz`, so a
+    correctly-wired MPJPE must collapse to ~0. The mesh is CPU-only,
+    deliberately, so this can't contend with the other session's GPU. An
+    empty cohort (`two_fly`/`contact_pair`, naturally empty on this
+    single-fly/all-female fixture) surfaces as NaN under its ordinary key,
+    not an absent key or a crash.
     """
     import jax
     import jax.numpy as jnp
@@ -140,28 +153,16 @@ def test_evaluate_end_to_end_with_a_ground_truth_stub():
     assert res["policy_miss_frac"] == 0.0
 
     # point 2: expected keys present, including per-cohort MPJPE entries.
-    # point 1: finite for every key this fixture has real data for -- slots
-    # 0/2/3 are deliberately excluded (slot 0 = SLOT_PROMPTED never receives a
-    # positive existence target in the maskless world; slots 2/3 = male/other
-    # never occur in this single-fly/all-female recording), same underlying
-    # reason `two_fly`/`contact_pair` are the zero-member cohorts below --
-    # neither is "an empty-cohort division" bug, both are this fixture having
-    # no data for that slice.
-    finite_keys = [
-        "mpjpe3d_units", "mpjpe3d_mm", "reproj_px", "uv2d_px", "head_vs_reproj_px",
-        "mpjpe3d_policy_units", "mpjpe3d_policy_mm", "policy_miss_frac",
-        "exist_prec", "exist_rec", "exist_prec_slot1", "exist_rec_slot1", "sex_acc",
-        "cohort_female", "cohort_single_fly", "policy_miss_frac_female",
-        "policy_miss_frac_single_fly", "sex_acc_female", "sex_acc_single_fly",
-    ] + [k for k in res if k.startswith("cohort_group_")]
-    for k in finite_keys:
+    for k in ("cohort_female", "cohort_single_fly", "cohort_group_A"):
         assert k in res, k
-        assert np.isfinite(res[k]), (k, res[k])
 
-    # point 3: a zero-member cohort must not crash and must not produce a
-    # value that looks like real data -- this implementation's sentinel is
-    # NaN, under the ordinary key (not an absent key).
-    for name in ("two_fly", "contact_pair"):
-        assert np.isnan(res[f"cohort_{name}"])
-        assert np.isnan(res[f"policy_miss_frac_{name}"])
-        assert np.isnan(res[f"sex_acc_{name}"])
+    # point 1 & 3, inverted: every key is checked, not just a curated subset
+    # -- a key not in `_EXPECTED_NAN` must be finite, so a newly added metric
+    # is covered by default and has to be DELIBERATELY excused, rather than
+    # silently unchecked. A denied key must actually BE NaN (not merely
+    # "not asserted"), so the deny-list can't mask a real bug either.
+    for k, v in res.items():
+        if k in _EXPECTED_NAN:
+            assert np.isnan(v), f"{k}: expected NaN ({_EXPECTED_NAN[k]}), got {v}"
+        else:
+            assert np.isfinite(v), (k, v)
