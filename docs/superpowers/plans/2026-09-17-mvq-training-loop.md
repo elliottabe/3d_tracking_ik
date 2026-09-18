@@ -565,7 +565,7 @@ git commit -m "feat(train): apply multi-view augmentation inside __getitem__"
 - Test: `tests/train/mvq/test_sampling.py`
 
 **Interfaces:**
-- Consumes: `WindowDataset.{is_female, n_flies, calib_group, source_id, weight, fly_centroids}` (Task 4 adds `source_id`).
+- Consumes: `WindowDataset.{is_female, n_flies, calib_group, source_id, behavior, weight, fly_centroids}` (Task 4 adds `source_id`; this task adds `behavior`).
 - Produces: `balanced_weights(ds, alpha, female_weight, female_host_weight=1.0, female_host_target=None, label=None) -> np.ndarray (N,) summing to 1`; `mix_weights(ds, tcfg, manifest) -> (weights (N,), mass dict[str, float])`; `MixCounter(ds)` with `.note_drawn(i)`, `.realised() -> (dict, int)`.
 
 Port `$SRC/train/train_mvq.py:498-556` (`_balanced_weights`) nearly verbatim — rename to `balanced_weights` (public). Keep the `female_host_target` solve and its one-sided guard EXACTLY: the `n_f == 0 or n_f == len(is_f) or f <= 1e-9 or f >= 1.0 - 1e-9` test exists because an all-female root's mass returns `0.9999999999999998` and a bare `f >= 1.0` would "solve" a multiplier of 4e-16.
@@ -575,7 +575,10 @@ Port `$SRC/train/train_mvq.py:498-556` (`_balanced_weights`) nearly verbatim —
 1. Group window indices by `ds.source_id(i)`.
 2. Run `balanced_weights` on each group **separately**, over that group's windows only, with `label=f"T={ds.T} source '{sid}'"`. Per-source balancing is load-bearing: the source's comment records that applying the pseudo export's own `female_host_weight` a second time over-samples female hosts by ~2x.
 3. Negative sources are those with `manifest["sources"][sid]["kind"] == "negative"` — **not** a name match. They take exactly `negatives_frac` of the mass, split evenly among them; the remaining `1 - negatives_frac` splits across the other sources **by window count**.
-4. Raise `ValueError` when a source contributes 0 windows at this `T`, naming the source and mentioning `pair_deltas` — a Δ no pair of labelled frames spans yields nothing and would silently drop out of the mix.
+4. Raise `ValueError` when a source the manifest declares contributes 0 windows at this `T`, naming the source and
+   mentioning `pair_deltas` — a Δ no pair of labelled frames spans yields nothing and would silently drop out of
+   the mix. `mix_weights` is **train-only** (val does no weighted sampling); say so in its docstring, because the
+   val split legitimately carries fewer sources than the manifest declares and this raise would misfire there.
 5. Validate `0.0 <= negatives_frac < 1.0`.
 
 `MixCounter` ports `$SRC/train/train_mvq.py:667-718` with `self._ds.name(i)` → `self._ds.source_id(i)`. Keep the lock and the "count, don't infer" property: two sources can carry the same `sample_weight`, so provenance cannot be read back off the batch.
@@ -671,13 +674,19 @@ def test_each_source_is_balanced_separately():
     assert np.isclose(w[:4].sum(), w[4:].sum(), atol=1e-9)
 
 
-def test_a_source_with_no_windows_raises():
+def test_negatives_frac_of_one_raises():
     ds = FakeDS(["human"] * 4, [False] * 4)
-    ds.sources = ["human"] * 4
     cfg = Cfg()
     cfg.negatives_frac = 1.0
     with pytest.raises(ValueError, match="negatives_frac"):
         mix_weights(ds, cfg, {"sources": {"human": {"kind": "human"}}})
+
+
+def test_a_source_the_manifest_declares_but_no_window_carries_raises():
+    ds = FakeDS(["human"] * 4, [False] * 4)
+    manifest = {"sources": {"human": {"kind": "human"}, "pseudo": {"kind": "pseudo"}}}
+    with pytest.raises(ValueError, match="pseudo"):
+        mix_weights(ds, Cfg(), manifest)
 
 
 def test_mix_counter_counts_what_was_drawn():
@@ -733,9 +742,11 @@ Port `$SRC/train/train_mvq.py:142-205`. Deviations, all from **maskless**:
 
 ```python
 # tests/train/mvq/test_step.py
+import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+import pytest
 
 from tracking.train.mvq.config import MVQTrainConfig
 from tracking.train.mvq.step import make_optimizer, normalize_crops
@@ -763,7 +774,6 @@ def test_backbone_lr_is_scaled_by_the_multiplier():
     cfg = MVQTrainConfig(lr=1e-3, backbone_lr_mult=0.1, warmup_steps=0, total_steps=10)
     sched_head = optax.warmup_cosine_decay_schedule(0.0, cfg.lr, 0, 10, 0.0)
     sched_bb = optax.warmup_cosine_decay_schedule(0.0, cfg.lr * cfg.backbone_lr_mult, 0, 10, 0.0)
-    assert np.isclose(float(sched_bb(0)) * 10, float(sched_head(0)) * 1, atol=1e-12) or True
     assert np.isclose(float(sched_bb(5)), float(sched_head(5)) * 0.1, rtol=1e-6)
 
 
@@ -779,27 +789,31 @@ def test_train_step_is_maskless():
 Add an end-to-end gradient test using the real model, skipped when no GPU is configured:
 
 ```python
-@pytest.mark.skipif(not jax.devices("gpu"), reason="no GPU configured")
+@pytest.mark.skipif(not jax.devices(), reason="no jax device")
 def test_two_steps_do_not_increase_a_fixed_batch_loss():
+    """Reuse test_losses.py's `_batch`/`_out` shapes; build the real model once."""
     from flax import nnx
 
+    from tests.train.mvq.test_losses import _batch
     from tracking.detector.mvq.model import MVQ, MVQConfig
     from tracking.train.mvq.losses import LossWeights
     from tracking.train.mvq.step import make_optimizer, make_train_step
 
-    cfg = MVQTrainConfig(lr=1e-4, warmup_steps=0, total_steps=2, batch_size=1)
+    rng = np.random.default_rng(0)
+    batch = _batch(rng)
+    batch["crops"] = jnp.zeros((2, 1, 3, 448, 448, 3), jnp.uint8)
+    cfg = MVQTrainConfig(lr=1e-4, warmup_steps=0, total_steps=2, batch_size=2)
     model = MVQ(MVQConfig(n_instances=4), rngs=nnx.Rngs(0))
     opt = make_optimizer(model, cfg)
     ema = nnx.state(model, nnx.Param)
-    before = jax.tree.leaves(ema)[0].copy()
+    before = np.asarray(jax.tree.leaves(ema)[0]).copy()
     step = make_train_step(np.arange(5), LossWeights(), cfg.ema)
-    batch = _fixed_batch()
     losses = []
     for _ in range(2):
         loss, _, ema = step(model, opt, ema, batch)
         losses.append(float(loss))
     assert losses[1] <= losses[0] * 1.05, f"loss rose: {losses}"
-    assert not np.array_equal(before, jax.tree.leaves(nnx.state(model, nnx.Param))[0])
+    assert not np.array_equal(before, np.asarray(jax.tree.leaves(nnx.state(model, nnx.Param))[0]))
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -859,7 +873,7 @@ def test_evaluate_shares_the_inference_policy():
 
     import tracking.train.mvq.evaluate as ev
     src = inspect.getsource(ev)
-    assert "from tracking.detector.mvq.policy import" in src or "policy." in src
+    assert "from tracking.detector.mvq.policy import" in src, "must import the shared policy"
     assert "def policy_instance" not in src, "the policy must be shared, not reimplemented"
 
 
@@ -983,7 +997,11 @@ def test_write_calibration_uses_the_keys_the_runner_reads(tmp_path):
 
 ```python
 # tests/train/mvq/test_checkpoint.py
+import json
+
+import jax
 import numpy as np
+import optax
 from flax import nnx
 
 from tracking.train.mvq.checkpoint import (make_manager, restore_latest, save_step,
