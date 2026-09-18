@@ -80,23 +80,3 @@ def make_train_step(part_of_k, weights: LossWeights, ema_decay: float, kp_weight
         ema = jax.tree_util.tree_map(lambda e, p: ema_decay * e + (1 - ema_decay) * p, ema, params)
         return loss, metrics, ema
     return step
-
-
-def _with_ema(model, ema, decay: float, t: int):
-    """A NEW module holding the DEBIASED EMA weights, independent of `model`'s
-    own Variable objects. `nnx.split`/`nnx.merge` on `model` itself would
-    return a module aliasing the SAME Variables as `model` (flax 0.12.8), so
-    `nnx.update(em, ema)` would silently overwrite the training model's live
-    params too -- `nnx.clone` makes a real copy first.
-
-    `ema` is a raw running sum seeded from ZERO, so after `t` updates it still
-    carries a `decay**t` shortfall relative to the true average -- the same
-    bias Adam corrects for its moment estimates. `t=0` returns the live params
-    undebiased (0/0 is undefined and shouldn't arise in normal use)."""
-    em = nnx.clone(model)
-    if t > 0:
-        correction = 1.0 - decay ** t
-        ema = jax.tree_util.tree_map(lambda e: e / correction, ema)
-        nnx.update(em, ema)
-    em.eval()
-    return em
