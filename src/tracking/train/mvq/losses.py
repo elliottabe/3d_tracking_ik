@@ -127,6 +127,9 @@ def mvq_loss(out, batch, w: LossWeights, part_of_k, kp_weight=None):
     FRAME 0 ONLY (`dist` comes from `cen0`), then reused on frame 1, so at T=2
     frame 1 cannot outvote frame 0 about which slot holds which fly.
 
+    `ignore = ignore & ~slot_target` because a slot that HOLDS a labelled fly
+    certainly exists and must stay supervised.
+
     `kp_weight` is the already-built (K,) per-keypoint weight vector (see
     `wing_kp_weight`); `part_of_k` (K,) maps each keypoint to its body part for
     the same-part repulsion term.
@@ -152,7 +155,6 @@ def mvq_loss(out, batch, w: LossWeights, part_of_k, kp_weight=None):
     dist = jnp.linalg.norm(cen0, axis=-1)  # (B,F) frame 0 decides the slot
     assign, slot_target = assign_slots(batch["fly_sex"], fv, batch["prompt_on"], dist, I)
     ignore = slot_ignore(batch["unlabelled_sex"], I)  # (B,I)
-    # a slot HOLDING a labelled fly certainly exists, so it stays supervised
     ignore = ignore & ~slot_target
     inst_matched = slot_target
     fv_eff = fv & (assign >= 0)  # a dropped fly (assign=-1) is treated like an unlabelled one
