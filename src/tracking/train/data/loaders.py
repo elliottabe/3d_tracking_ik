@@ -54,6 +54,8 @@ class WindowSpec:
     center_shift_units: float
     sex_overrides: dict
     masks_root: str | None = None
+    aug: object = None
+    lr_swap: object = None
 
 
 def build_dataset(spec):
@@ -81,6 +83,8 @@ def build_dataset(spec):
         center_shift_units=spec.center_shift_units,
         sex_overrides=dict(spec.sex_overrides or {}),
         masks_root=spec.masks_root,
+        aug=spec.aug,
+        lr_swap=spec.lr_swap,
     )
 
 
