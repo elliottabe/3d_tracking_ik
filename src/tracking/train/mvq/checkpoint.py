@@ -15,21 +15,22 @@ import jax
 import orbax.checkpoint as ocp
 from flax import nnx
 
-_EMA_META_HANDLER = {"ema_meta": ocp.JsonCheckpointHandler(filename="ema_meta.json")}
-
 
 def make_manager(ckpt_dir, *, max_to_keep=3):
     """mvq-local checkpoint manager: model + optimizer + EMA + ema_meta.
-    `ema_meta` is `{"ema_updates": int, "ema_zero_seeded": True}`, written to
-    a named `ema_meta.json` rather than Orbax's generic `metadata` file so
-    it reads as an ordinary artifact on disk; see `restore_latest` for why
-    its contents must be explicit rather than inferred."""
+    `ema_meta` is `{"ema_updates": int, "ema_zero_seeded": True}`, left at
+    Orbax's default `JsonCheckpointHandler` filename -- `detector/mvq/
+    checkpoint.py`'s read-only manager builds its `ema_meta` handler the
+    same bare way, and `JsonCheckpointHandler.restore` does an exact
+    filename lookup with no fallback, so a custom filename here would make
+    every numbered checkpoint unloadable by that reader. See
+    `restore_latest` for why `ema_meta`'s contents must be explicit rather
+    than inferred."""
     os.makedirs(ckpt_dir, exist_ok=True)
     opts = ocp.CheckpointManagerOptions(max_to_keep=max_to_keep, save_interval_steps=1)
     return ocp.CheckpointManager(
         os.path.abspath(ckpt_dir), options=opts,
-        item_names=("model", "opt", "ema", "ema_meta"),
-        item_handlers=_EMA_META_HANDLER)
+        item_names=("model", "opt", "ema", "ema_meta"))
 
 
 def save_step(mngr, steps_done, model, optimizer, ema, ema_updates: int):
