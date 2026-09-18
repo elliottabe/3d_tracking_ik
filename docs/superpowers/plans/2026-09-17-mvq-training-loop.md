@@ -1059,7 +1059,9 @@ def test_ema_meta_records_the_zero_seed_flag(tmp_path):
     mngr = make_manager(tmp_path / "ckpt")
     save_step(mngr, 1, model, opt, ema, ema_updates=1)
     mngr.wait_until_finished()
-    meta = json.loads((tmp_path / "ckpt" / "1" / "ema_meta" / "ema_meta.json").read_text())
+    r = make_manager(tmp_path / "ckpt").restore(
+        1, args=ocp.args.Composite(ema_meta=ocp.args.JsonRestore()))
+    meta = r["ema_meta"]
     assert meta["ema_zero_seeded"] is True and meta["ema_updates"] == 1
 
 
