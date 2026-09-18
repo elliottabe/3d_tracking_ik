@@ -20,7 +20,11 @@ DATA_ROOT="/gscratch/portia/eabe/data/Johnson_lab/processed/amputation"
 MANIFEST_DIR="$REPO/slurm_logs"
 RUN_NAME=""
 SLURM_CFG=gpu_l40s
-CONCURRENCY=10
+# Empty means UNCAPPED: the scheduler decides how many array tasks run at
+# once. A cap only buys politeness on a contended partition, and it turns a
+# 103-task campaign into ceil(103/cap) serial waves for no gain elsewhere.
+# A profile may set `max_concurrent:`; --concurrency overrides both.
+CONCURRENCY=""
 # Empty means "take the profile's own constraint"; set to narrow the GPU types.
 CONSTRAINT=""
 RECORDINGS=""
@@ -42,7 +46,7 @@ done
 
 [ -n "$RUN_NAME" ] || {
     echo "usage: $0 --run-name NAME [--data-root DIR] [--manifest-dir DIR]" >&2
-    echo "          [--slurm gpu_l40s|ckpt_all] [--concurrency N] [--constraint EXPR]" >&2
+    echo "          [--slurm PROFILE] [--concurrency N] [--constraint EXPR]" >&2
     echo "          [--recordings id1,id2,...] [--dry-run]" >&2
     echo "  --run-name is REQUIRED: the pipeline's own default is 'debug'," >&2
     echo "  which must never name a real campaign's outputs." >&2
@@ -109,31 +113,41 @@ echo
 
 SLURM_YAML="$REPO/configs/slurm/${SLURM_CFG}.yaml"
 [ -f "$SLURM_YAML" ] || { echo "no such slurm config: $SLURM_YAML" >&2; exit 2; }
-# `|| true`: a missing key makes grep exit 1, and under `set -o pipefail` that
-# status propagates. Harmless inside `[ ... ]`, fatal in a bare assignment.
-_y() { grep -E "^$1:" "$SLURM_YAML" | head -1 | sed -E "s/^$1:[[:space:]]*//; s/^['\"]//; s/['\"]$//" || true; }
+
+# The profile is YAML, so it is parsed as YAML -- the same `yaml.safe_load`
+# session_pipeline.sh uses. An earlier grep/sed version of this got the quoting
+# right by luck and the exit status wrong: `grep` misses a key, `set -o
+# pipefail` propagates the 1, and `--slurm gpu_l40s` (no `constraint:` key)
+# exited before submitting anything. One parse, shell-quoted, no such class.
+eval "$(python3 - "$SLURM_YAML" <<'PY'
+import shlex, sys, yaml
+
+KEYS = ("partition", "account", "time", "cpus_per_task", "mem",
+        "gres", "constraint", "exclude", "requeue", "max_concurrent")
+cfg = yaml.safe_load(open(sys.argv[1])) or {}
+for k in KEYS:
+    v = cfg.get(k)
+    v = "" if v is None else ("true" if v is True else ("" if v is False else str(v)))
+    print(f"SL_{k.upper()}={shlex.quote(v)}")
+PY
+)"
+
+for _req in SL_PARTITION SL_ACCOUNT SL_TIME SL_CPUS_PER_TASK SL_MEM; do
+    [ -n "${!_req}" ] || { echo "$SLURM_YAML has no ${_req#SL_} value" >&2; exit 2; }
+done
 
 RESOURCE_FLAGS=(
-    "--partition=$(_y partition)" "--account=$(_y account)"
-    "--time=$(_y time)" "--cpus-per-task=$(_y cpus_per_task)" "--mem=$(_y mem)"
+    "--partition=$SL_PARTITION" "--account=$SL_ACCOUNT"
+    "--time=$SL_TIME" "--cpus-per-task=$SL_CPUS_PER_TASK" "--mem=$SL_MEM"
 )
-# `|| true`: under `set -euo pipefail`, each of these lines is safe today only
-# because more commands follow it -- a failing `[ -n ... ]` test on the LAST
-# command of the script would exit the script with status 1. That safety is
-# accidental, not structural: a future reorder that moved one of these to the
-# end would turn a missing/false key into a silent non-submission instead of
-# just skipping the optional flag. `|| true` makes each line's exit status
-# independent of position.
-[ -n "$(_y gres)" ]       && RESOURCE_FLAGS+=("--gres=$(_y gres)") || true
-# --constraint overrides the profile, e.g. to keep a campaign off the older cards.
-_CONSTRAINT="${CONSTRAINT:-$(_y constraint)}"
+[ -n "$SL_GRES" ] && RESOURCE_FLAGS+=("--gres=$SL_GRES") || true
+# --constraint overrides the profile for one campaign; prefer a profile
+# (configs/slurm/ckpt_best.yaml) when the choice is one you will make again.
+_CONSTRAINT="${CONSTRAINT:-$SL_CONSTRAINT}"
 [ -n "$_CONSTRAINT" ] && RESOURCE_FLAGS+=("--constraint=$_CONSTRAINT") || true
-[ -n "$(_y exclude)" ]    && RESOURCE_FLAGS+=("--exclude=$(_y exclude)") || true
-# ckpt-all is preemptible and its profile sets `requeue: true`; without this a
-# preempted array task is simply lost. session_pipeline.sh does the same
-# (`if slurm_cfg.get("requeue")`). Compared against "true" rather than tested
-# for non-emptiness so that `requeue: false` does NOT add the flag.
-[ "$(_y requeue)" = "true" ] && RESOURCE_FLAGS+=("--requeue") || true
+[ -n "$SL_EXCLUDE" ] && RESOURCE_FLAGS+=("--exclude=$SL_EXCLUDE") || true
+# ckpt-all is preemptible; without --requeue a preempted array task is lost.
+[ "$SL_REQUEUE" = "true" ] && RESOURCE_FLAGS+=("--requeue") || true
 
 # -- VERIFIED FACT 1, copied from session_pipeline.sh: `module load cuda` alone
 #    measurably leaves JAX on cpu on this cluster; the env's own bundled wheels
@@ -160,8 +174,13 @@ BODY+="python -m tracking.run recording=amputation \"recording.id='\$_REC'\" "
 BODY+="ik=amputation anatomy=v1 run.name=$(printf '%q' "$RUN_NAME") "
 BODY+="'stages=[bouts,ingest3d,preprocess,ik,postprocess,collect]'"
 
+# `%N` is appended only when a cap was actually asked for.
+_CAP="${CONCURRENCY:-$SL_MAX_CONCURRENT}"
+_THROTTLE=""
+[ -n "$_CAP" ] && _THROTTLE="%$_CAP" || true
+
 FLAGS=("--job-name=amputation-$RUN_NAME"
-       "--array=0-$((N - 1))%$CONCURRENCY"
+       "--array=0-$((N - 1))${_THROTTLE}"
        "${RESOURCE_FLAGS[@]}"
        "--output=$REPO/slurm_logs/%x-%A_%a.out"
        "--error=$REPO/slurm_logs/%x-%A_%a.out")

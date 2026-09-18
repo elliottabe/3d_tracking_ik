@@ -1,0 +1,29 @@
+# The checkpoint partition, restricted to the GPUs worth waiting for.
+#
+#   scripts/slurm/amputation_array.sh --run-name ik_v1 --slurm ckpt_best
+#
+# Same as `ckpt_all` but WITHOUT `l40` and `a40`. Those two are the bulk of
+# ckpt-all's capacity (27 + 15 nodes against 8 h200 + 8 a100 + 25 l40s,
+# measured 2026-09-18), so admitting them fills a campaign with the slowest
+# cards on the partition. Excluding them still leaves ~328 GPUs, far more
+# than any one campaign can occupy.
+#
+# `requeue` is load-bearing here, as it is for `ckpt_all`: this partition is
+# preemptible, and without it a preempted array task is simply lost.
+partition: ckpt-all
+constraint: 'h200|a100|l40s'
+account: portia
+gres: "gpu:1"
+exclude: g3121,g3108
+cpus_per_task: 8
+mem: "128G"
+time: "12:00:00"
+requeue: true
+
+# No `max_concurrent`: an absent value means the array is uncapped and the
+# scheduler decides. A cap here only makes sense to be polite on a contended
+# partition -- ckpt-all is the opposite of that.
+
+setup_commands:
+  - "module load cuda"
+  - "unset JAX_PLATFORMS"

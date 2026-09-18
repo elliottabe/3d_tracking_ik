@@ -1,5 +1,6 @@
 """The amputation campaign freezes its recording list at submit time."""
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -193,3 +194,69 @@ def test_constraint_flag_on_a_profile_without_one_adds_it(tmp_path):
     )
     assert out.returncode == 0, out.stderr
     assert "--constraint=h200" in out.stdout
+
+
+def test_array_is_uncapped_unless_a_cap_is_asked_for(tmp_path):
+    """A cap turns N tasks into ceil(N/cap) serial waves; it must be opt-in."""
+    root = _data_root(tmp_path, ["2026_07_06_16_55_07", "2026_07_06_17_11_20"])
+    common = [
+        "--dry-run",
+        "--run-name",
+        "ik_v1",
+        "--data-root",
+        str(root),
+        "--manifest-dir",
+        str(tmp_path),
+    ]
+    default = _run(*common)
+    assert default.returncode == 0, default.stderr
+    # the log pattern legitimately contains %, so check the array flag itself
+    array_flag = re.search(r"--array=\S+", default.stdout).group(0)
+    assert array_flag == "--array=0-1", array_flag
+
+    capped = _run(*common, "--concurrency", "4")
+    assert capped.returncode == 0, capped.stderr
+    assert "--array=0-1%4" in capped.stdout
+
+
+def test_ckpt_best_profile_excludes_the_slower_cards(tmp_path):
+    root = _data_root(tmp_path, ["2026_07_06_16_55_07"])
+    out = _run(
+        "--dry-run",
+        "--run-name",
+        "ik_v1",
+        "--data-root",
+        str(root),
+        "--manifest-dir",
+        str(tmp_path),
+        "--slurm",
+        "ckpt_best",
+    )
+    assert out.returncode == 0, out.stderr
+    flags = out.stdout.split("--wrap")[0]
+    assert "--constraint=h200|a100|l40s" in flags
+    assert "a40" not in flags and "l40 " not in flags
+    assert "--requeue" in flags
+
+
+def test_a_profile_missing_a_required_key_refuses(tmp_path):
+    """The YAML is parsed as YAML, so a malformed profile fails loudly."""
+    bad = Path(REPO) / "configs" / "slurm" / "_pytest_tmp_bad.yaml"
+    bad.write_text("account: portia\n")  # no partition/time/cpus/mem
+    try:
+        root = _data_root(tmp_path, ["2026_07_06_16_55_07"])
+        out = _run(
+            "--dry-run",
+            "--run-name",
+            "ik_v1",
+            "--data-root",
+            str(root),
+            "--manifest-dir",
+            str(tmp_path),
+            "--slurm",
+            "_pytest_tmp_bad",
+        )
+        assert out.returncode != 0
+        assert "PARTITION" in out.stderr or "partition" in out.stderr
+    finally:
+        bad.unlink()
