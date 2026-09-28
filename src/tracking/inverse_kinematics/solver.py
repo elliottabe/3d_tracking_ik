@@ -1,4 +1,5 @@
-"""Per-frame jaxls (Levenberg-Marquardt) IK solver."""
+"""jaxls (Levenberg-Marquardt) IK solver: independent frames, or windows
+coupled by a temporal smoothness cost."""
 
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ __all__ = [
     "FREE_JOINT_NDOF",
     "SolverSettings",
     "PerFrameSolver",
+    "temporal_windows",
     "mjx_load",
     "set_site_pos",
     "get_site_pos",
@@ -172,6 +174,13 @@ class SolverSettings:
     parameter_tolerance: float = 1e-16
     batch: int = 512
     linear_solver: str = "auto"
+    smooth_weight: float = 0.0
+    """Weight on `[SE3 log(prev^-1 curr); (q_t - q_{t-1}) * mult]` between
+    consecutive frames. Only read by `solve_temporal`."""
+    smooth_q_mult: tuple[float, ...] | None = None
+    """`(nq,)` per-DOF multiplier on the hinge part of the smoothness cost
+    (qpos layout; the free-joint slots are ignored, the root is smoothed at
+    the base weight). None = 1.0 everywhere."""
     penetration_weight: float = 0.0
     """Weight on an ANALYTIC self-intersection penalty. 0.0 (default) leaves
     the cost exactly as it was.
@@ -188,6 +197,52 @@ class SolverSettings:
     from those keeps the gradient: measured finite, max 1.97e-3, non-zero on
     18 of 93 DOFs, and strongest on wing roll and pitch -- the two this
     project independently measured as driving the overlap (r=0.80 / 0.75)."""
+
+
+# Above this many tangent dims (T * (6 + n_hinges)) a windowed solve switches
+# to conjugate gradient; the old JaxlsBatchSolver's threshold.
+_DENSE_THRESHOLD = 5000
+
+
+def temporal_windows(
+    frame_idx: np.ndarray, window: int, overlap: int
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Split solvable frames into overlapping windows that never span a gap.
+
+    Args:
+        frame_idx: `(N,)` increasing frame numbers of the solvable frames.
+        window: frames per window.
+        overlap: frames shared by consecutive windows of one run.
+
+    Returns:
+        `[(pos, keep), ...]`: `pos` indexes `frame_idx` (len <= `window`),
+        `keep` is the bool mask of `pos` this window owns. Every position is
+        owned by exactly one window; ownership switches mid-overlap.
+
+    Example:
+        >>> [p.tolist() for p, _ in temporal_windows(np.array([0, 1, 2, 5, 6]), 2, 0)]
+        [[0, 1], [2], [3, 4]]
+    """
+    frame_idx = np.asarray(frame_idx)
+    if not 0 <= overlap < window:
+        raise ValueError(f"temporal_windows: need 0 <= overlap < window, got {overlap}, {window}")
+    breaks = np.flatnonzero(np.diff(frame_idx) != 1) + 1
+    out = []
+    for run in np.split(np.arange(frame_idx.size), breaks):
+        L = run.size
+        if L == 0:
+            continue
+        if L <= window:
+            out.append((run, np.ones(L, bool)))
+            continue
+        starts = list(range(0, L - window + 1, window - overlap))
+        if starts[-1] != L - window:
+            starts.append(L - window)
+        bounds = [0] + [(b + a + window) // 2 for a, b in zip(starts, starts[1:])] + [L]
+        for k, a in enumerate(starts):
+            local = np.arange(a, a + window)
+            out.append((run[local], (local >= bounds[k]) & (local < bounds[k + 1])))
+    return out
 
 
 class _AnalyzedProblem(NamedTuple):
@@ -299,7 +354,7 @@ class PerFrameSolver:
         """`self.settings.linear_solver`, or `"dense_cholesky"` for `"auto"`."""
         if self.settings.linear_solver != "auto":
             return self.settings.linear_solver
-        return "dense_cholesky"
+        return "dense_cholesky" if T * tangent_dim < _DENSE_THRESHOLD else "conjugate_gradient"
 
     def _build_se3(
         self,
@@ -315,9 +370,8 @@ class PerFrameSolver:
         site_idxs: jnp.ndarray,
         pen=None,
     ) -> _AnalyzedProblem:
-        """Marker-tracking + hinge box-limit costs only: no regularizer and
-        no smoothness term.
-        """
+        """Marker-tracking + hinge box-limit costs, plus the smoothness cost
+        when `T > 1` and `settings.smooth_weight > 0`."""
         n_hinges = nq - FREE_JOINT_NDOF
         dummy_joints = jnp.zeros((n_hinges,))
         dummy_kp = jnp.zeros((n_kp_dim,))
@@ -430,6 +484,32 @@ class PerFrameSolver:
 
         costs.append(limit_cost(joint_all))
 
+        sw = float(self.settings.smooth_weight)
+        if T > 1 and sw > 0.0:
+            mult = self.settings.smooth_q_mult
+            hinge_mult = 1.0 if mult is None else jnp.asarray(mult[FREE_JOINT_NDOF:])
+
+            @jaxls.Cost.factory
+            def smoothness_cost(
+                var_values: jaxls.VarValues,
+                root_curr: SE3Var,
+                root_prev: SE3Var,
+                joint_curr: JointVar,
+                joint_prev: JointVar,
+            ) -> jnp.ndarray:
+                root_diff = (var_values[root_prev].inverse() @ var_values[root_curr]).log()
+                joint_diff = (var_values[joint_curr] - var_values[joint_prev]) * hinge_mult
+                return jnp.concatenate([root_diff, joint_diff]) * sw
+
+            costs.append(
+                smoothness_cost(
+                    SE3Var(jnp.arange(1, T)),
+                    SE3Var(jnp.arange(0, T - 1)),
+                    JointVar(jnp.arange(1, T)),
+                    JointVar(jnp.arange(0, T - 1)),
+                )
+            )
+
         variables = [root_all, joint_all, kp_all, offset_all, frozen_all]
         analyzed = jaxls.LeastSquaresProblem(costs=costs, variables=variables).analyze()
         return _AnalyzedProblem(
@@ -480,6 +560,8 @@ class PerFrameSolver:
             tuple(int(x) for x in np.asarray(site_idxs).ravel()),
             pen_key,
             float(self.settings.penetration_weight),
+            float(self.settings.smooth_weight),
+            self.settings.smooth_q_mult,
         )
         if key in self._cache:
             return self._cache[key]
@@ -615,7 +697,7 @@ class PerFrameSolver:
                 jaxlie.SO3(wxyz=wxyz_init), xyz_init
             )
             n_site_dim = int(offsets.shape[-1])
-            sol = prob.analyzed.solve(
+            sol, summ = prob.analyzed.solve(
                 verbose=False,
                 linear_solver=linear_solver,
                 trust_region=trust,
@@ -631,12 +713,14 @@ class PerFrameSolver:
                         frozen_var_cls(jnp.arange(T)).with_value(frozen_q),
                     ]
                 ),
+                return_summary=True,
             )
             sol_roots = sol[se3_var_cls(jnp.arange(T))]
             sol_joints = sol[joint_var_cls(jnp.arange(T))]
-            return jnp.concatenate(
+            q = jnp.concatenate(
                 [sol_roots.translation(), sol_roots.rotation().wxyz, sol_joints], axis=-1
             )
+            return q, summ.iterations
 
         return solve
 
@@ -651,7 +735,9 @@ class PerFrameSolver:
     ) -> jnp.ndarray:
         n_hinges = q_init.shape[1] - FREE_JOINT_NDOF
         linear_solver = self._pick_linear_solver(T, 6 + n_hinges)
-        return self._se3_solve_fn(prob, T, linear_solver)(q_init, kp_data, offsets, frozen_q)
+        q, it = self._se3_solve_fn(prob, T, linear_solver)(q_init, kp_data, offsets, frozen_q)
+        self._last_iterations = np.full(T, int(it), np.int32)
+        return q
 
     def solve(
         self,
@@ -730,6 +816,67 @@ class PerFrameSolver:
             )
             qpos = self._solve_se3(prob, T, q_init, kp_data, offsets, frozen_q)
         return np.asarray(qpos)
+
+    def solve_temporal(
+        self,
+        *,
+        q_init: np.ndarray,
+        frame_idx: np.ndarray,
+        window: int,
+        overlap: int,
+        mjx_model,
+        mjx_data,
+        kp_data: np.ndarray,
+        qs_to_opt: np.ndarray,
+        kp_weights: np.ndarray,
+        lb: np.ndarray,
+        ub: np.ndarray,
+        site_idxs: np.ndarray,
+    ) -> np.ndarray:
+        """Solve `N` frames with consecutive frames coupled by the smoothness
+        cost, in `temporal_windows(frame_idx, window, overlap)`. `(N, nq)`.
+
+        Args match `solve()`, plus `frame_idx` `(N,)` (the frame number of
+        each row, so a gap cuts the coupling). Short windows are padded to
+        `window` with NaN-keypoint frames, so one problem is compiled.
+        Sets `last_iterations` to each row's window LM iteration count.
+        """
+        if float(self.settings.smooth_weight) <= 0.0:
+            raise ValueError("solve_temporal needs settings.smooth_weight > 0")
+        kp_data = np.asarray(kp_data, np.float64).reshape(len(q_init), -1)
+        q_init = np.asarray(q_init, np.float64)
+        N, nq = q_init.shape
+        W = int(min(window, N))
+        prob = self._get_analyzed(
+            W,
+            mjx_model,
+            mjx_data,
+            jnp.asarray(kp_data),
+            jnp.asarray(qs_to_opt),
+            jnp.asarray(kp_weights),
+            jnp.asarray(lb),
+            jnp.asarray(ub),
+            jnp.asarray(site_idxs),
+        )
+        key = ("temporal", id(prob), W)
+        if key not in self._independent_fns:
+            ls = self._pick_linear_solver(W, 6 + nq - FREE_JOINT_NDOF)
+            self._independent_fns[key] = jax.jit(self._se3_solve_fn(prob, W, ls))
+        solve_w = self._independent_fns[key]
+        offsets = jnp.asarray(mjx_model.site_pos)[jnp.asarray(site_idxs)].flatten()
+        frozen = np.broadcast_to(np.asarray(mjx_data.qpos), (W, nq))
+
+        out = np.full((N, nq), np.nan)
+        its = np.full(N, -1, np.int32)
+        for pos, keep in temporal_windows(frame_idx, W, min(overlap, W - 1)):
+            n = pos.size
+            qi = np.concatenate([q_init[pos], np.repeat(q_init[pos[-1:]], W - n, axis=0)])
+            ki = np.concatenate([kp_data[pos], np.full((W - n, kp_data.shape[1]), np.nan)])
+            q_w, it = solve_w(jnp.asarray(qi), jnp.asarray(ki), offsets, jnp.asarray(frozen))
+            out[pos[keep]] = np.asarray(q_w)[:n][keep]
+            its[pos[keep]] = int(it)
+        self._last_iterations = its
+        return out
 
     def solve_frame(self, q0: np.ndarray, **kw) -> np.ndarray:
         """One frame. `q0` `(nq,)` -> `(nq,)`. The `T=1` case of `solve()`:"""

@@ -18,6 +18,14 @@ per_frame:
   gradient_tolerance: 1.0e-14
   parameter_tolerance: 1.0e-16
   batch: 512
+  # Temporal bulk solve (weight > 0): consecutive frames coupled by a
+  # smoothness cost on root + joints, then wings refined per-frame.
+  temporal:
+    weight: 0.03
+    leg_mult: 0.1
+    wing_mult: 0.05
+    window: 256
+    overlap: 32
 
 # fnmatch patterns over `anatomy.names_qpos`; matching qpos slots are held at
 # their warm-start value instead of being optimised. Empty means solve every

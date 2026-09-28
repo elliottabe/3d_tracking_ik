@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import fnmatch
 import json
 import os
@@ -33,6 +34,7 @@ __all__ = [
     "WING_DOF_PATTERNS",
     "chained_starts",
     "dof_mask",
+    "temporal_q_mult",
     "frame_costs",
     "qvel_from_qpos",
     "refine_wings",
@@ -98,6 +100,20 @@ def wing_dof_weights(names_qpos: Sequence[str], wing_weight: float) -> np.ndarra
     w = np.ones(len(names_qpos), dtype=np.float64)
     w[dof_mask(names_qpos, WING_DOF_PATTERNS)] = float(wing_weight)
     return w
+
+
+# Leg DOFs on both anatomies: every leg joint name ends `_T{1,2,3}_{side}`.
+LEG_DOF_PATTERNS: tuple[str, ...] = ("*_T[123]_*",)
+
+TEMPORAL = "temporal"
+
+
+def temporal_q_mult(names_qpos: Sequence[str], leg_mult: float, wing_mult: float) -> tuple:
+    """`(nq,)` smoothness multiplier: `leg_mult` on legs, `wing_mult` on wings, 1.0 elsewhere."""
+    m = np.ones(len(names_qpos))
+    m[dof_mask(names_qpos, LEG_DOF_PATTERNS)] = float(leg_mult)
+    m[dof_mask(names_qpos, WING_DOF_PATTERNS)] = float(wing_mult)
+    return tuple(float(v) for v in m)
 
 
 def select_by_cost(costs: np.ndarray) -> np.ndarray:
@@ -401,7 +417,12 @@ def solve_bout(
     solve_mask: np.ndarray | None = None,
     freeze_dof_patterns: Sequence[str] = (),
 ) -> PerFrameResult:
-    """Solve every frame of `kp3d_model` `(T, K, 3)` independently."""
+    """Solve every frame of `kp3d_model` `(T, K, 3)`.
+
+    With `per_frame_cfg['temporal']['weight'] > 0` the bulk solve couples
+    consecutive frames (`PerFrameSolver.solve_temporal`) and replaces the
+    multi-start candidates; `refine_wings` then stays per-frame.
+    """
     t_start = time.time()
     kp3d_model = np.asarray(kp3d_model, dtype=np.float64)
     if kp3d_model.ndim != 3 or kp3d_model.shape[-1] != 3:
@@ -457,6 +478,21 @@ def solve_bout(
     do_refine = bool(cfg.get("refine_wings", True))
     max_qvel = float(cfg.get("max_qvel", 20.0))
     settings = settings if settings is not None else solver_settings_from_cfg(cfg)
+    tcfg = dict(cfg.get("temporal") or {})
+    temporal = float(tcfg.get("weight", 0.0)) > 0.0
+    if temporal:
+        tcfg = dict(
+            weight=float(tcfg["weight"]),
+            leg_mult=float(tcfg.get("leg_mult", 0.1)),
+            wing_mult=float(tcfg.get("wing_mult", 0.05)),
+            window=int(tcfg.get("window", 256)),
+            overlap=int(tcfg.get("overlap", 32)),
+        )
+        settings = dataclasses.replace(
+            settings,
+            smooth_weight=tcfg["weight"],
+            smooth_q_mult=temporal_q_mult(anatomy.names_qpos, tcfg["leg_mult"], tcfg["wing_mult"]),
+        )
 
     offsets = np.asarray(offsets, dtype=np.float64).reshape(-1, 3)
     if offsets.shape[0] != n_kp:
@@ -510,16 +546,26 @@ def solve_bout(
         ub=anatomy.ub,
         site_idxs=site_idxs,
     )
-    cand_names: list[str] = [ZERO_START]
+    cand_names: list[str] = [TEMPORAL if temporal else ZERO_START]
     cand_q: list[np.ndarray] = []
     cand_it: list[np.ndarray] = []
     solve_seconds: dict[str, float] = {}
 
     t0 = time.time()
-    q_zero = np.asarray(solver.solve(q_init=q_init, **common), dtype=np.float64)
+    if temporal:
+        q_zero = solver.solve_temporal(
+            q_init=q_init,
+            frame_idx=idx,
+            window=tcfg["window"],
+            overlap=tcfg["overlap"],
+            **common,
+        )
+        starts = []  # the coupled solve replaces the multi-start candidates
+    else:
+        q_zero = np.asarray(solver.solve(q_init=q_init, **common), dtype=np.float64)
     cand_q.append(q_zero)
     cand_it.append(np.asarray(solver.last_iterations))
-    solve_seconds[ZERO_START] = round(time.time() - t0, 1)
+    solve_seconds[cand_names[0]] = round(time.time() - t0, 1)
 
     for name, q0 in chained_starts(
         q_zero, anatomy.names_qpos, np.asarray(mj.qpos_spring), starts
@@ -602,6 +648,7 @@ def solve_bout(
         frames_at_iteration_cap=n_cap,
         cost_median=float(np.nanmedian(costs[choice, np.arange(idx.size)])),
         refine_wings=do_refine,
+        temporal=tcfg if temporal else None,
         dt=dt,
     )
     return PerFrameResult(
@@ -654,7 +701,9 @@ def write_stac_h5(path, result: PerFrameResult, *, anatomy, cfg) -> None:
             f.create_dataset("candidate_costs", data=np.asarray(result.candidate_costs, np.float32))
         if bool(result.summary.get("refine_wings")):
             f.create_dataset("qpos_selected", data=np.asarray(result.qpos_selected, np.float32))
-        f.attrs["ik_solver"] = "per_frame"
+        f.attrs["ik_solver"] = (
+            "temporal_body+perframe_wings" if result.summary.get("temporal") else "per_frame"
+        )
         f.attrs["ik_candidates"] = candidates
         f.attrs["ik_summary"] = json.dumps(dict(result.summary), default=str)
     os.replace(tmp, path)

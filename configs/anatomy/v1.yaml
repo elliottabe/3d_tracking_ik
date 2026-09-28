@@ -624,7 +624,8 @@ model:
   # the per-frame solve ran with this file still saying 0.005 while
   # solve_per_frame_ik passes smooth_weight=0.0 to the solver explicitly and
   # never reads this key at all. Tuning this number changes nothing on either
-  # path -- do not treat a change here as having done anything.
+  # path -- do not treat a change here as having done anything. The live
+  # temporal weight is configs/ik/default.yaml `per_frame.temporal.weight`.
   JAXLS_SMOOTH_WEIGHT: 0.005
   JAXLS_LINEAR_SOLVER: "auto"
   JAXLS_USE_SE3_ROOT: true
