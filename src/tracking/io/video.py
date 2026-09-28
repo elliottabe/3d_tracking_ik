@@ -69,7 +69,7 @@ def _slot_position(plan: dict[str, Any] | None, camera: str, slot: int) -> int:
     if plan is None:
         return int(slot)
     positions = _cam_positions(plan, camera)
-    return int(positions[slot])
+    return int(slot) if positions is None else int(positions[slot])
 
 
 def _cap_get(cap, prop_id: int) -> float:
