@@ -19,6 +19,7 @@ import numpy as np  # noqa: E402
 
 from tracking.inverse_kinematics.bridge import umeyama, world_to_model  # noqa: E402
 from tracking.io.names import Order  # noqa: E402
+from tracking.io.video import SlotReader, load_sync_plan  # noqa: E402
 from tracking.postprocess.kinematics import fitted_site_xpos_from_qpos  # noqa: E402
 from tracking.preprocess.filter import DEFAULT_FILTER_CFG, filter_kp3d  # noqa: E402
 from tracking.viz.colors import PALETTE, leg_chains  # noqa: E402
@@ -90,11 +91,15 @@ def render_sidebyside(
 ) -> dict:
     """Render ONE bout-fly's side-by-side check to `video_path`/`still_path`,
     and stamp `pose_source_path` with `outputs.h5`'s own `pose_source` attr.
+
+    `cameras`: None renders the single camera with the highest median 2D
+    confidence over the rendered frames; "all" renders every rig camera;
+    a list renders those. Video is read forward-only through `SlotReader`,
+    aligned by the session's sync plan.
     """
     fly_dir = Path(fly_dir)
     video_dir = Path(video_dir)
     kp_order = anatomy.kp_order
-    cams = list(cameras) if cameras else list(rig.cameras)
     chains_idx = [[kp_order.index(n) for n in chain] for chain in leg_chains(kp_order)]
 
     cap = cv2.VideoCapture(str(video_dir / f"{list(rig.cameras)[0]}.mp4"))
@@ -106,16 +111,6 @@ def render_sidebyside(
     data = mujoco.MjData(model)
     if model.nq != anatomy.nq:
         raise ValueError(f"render model nq={model.nq} != anatomy nq={anatomy.nq}")
-    cid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "rigcam")
-    # One renderer per distinct render width: MuJoCo fixes the viewport at
-    # construction, and each camera needs its own square-pixel correction.
-    render_w = {
-        cn: render_width_for_square_pixels(
-            rig.matrices_f64[list(rig.cameras).index(cn)].T, (width, height)
-        )
-        for cn in cams
-    }
-    renderers = {w: mujoco.Renderer(model, height=height, width=w) for w in set(render_w.values())}
 
     with h5py.File(fly_dir / "outputs.h5", "r") as f:
         world = np.asarray(f["kp3d_mm"][()], np.float64)
@@ -148,7 +143,27 @@ def render_sidebyside(
     if not frame_idxs:
         raise ValueError(f"{fly_dir}: qpos has {qpos.shape[0]} frames -- nothing to sample")
 
-    caps = {cn: cv2.VideoCapture(str(video_dir / f"{cn}.mp4")) for cn in cams}
+    if cameras is None:
+        med = np.nanmedian(conf2d[frame_idxs], axis=(0, 2))
+        cams = [list(rig.cameras)[int(np.nanargmax(med))]]
+    elif cameras == "all":
+        cams = list(rig.cameras)
+    else:
+        cams = list(cameras)
+    cid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "rigcam")
+    # One renderer per distinct render width: MuJoCo fixes the viewport at
+    # construction, and each camera needs its own square-pixel correction.
+    render_w = {
+        cn: render_width_for_square_pixels(
+            rig.matrices_f64[list(rig.cameras).index(cn)].T, (width, height)
+        )
+        for cn in cams
+    }
+    renderers = {w: mujoco.Renderer(model, height=height, width=w) for w in set(render_w.values())}
+
+    reader = SlotReader(
+        video_dir, cams, plan=load_sync_plan(video_dir), start_slot=bout_start_frame + frame_idxs[0]
+    )
     checks: dict[str, float] = {}
     frame_imgs: list[np.ndarray] = []
     try:
@@ -166,8 +181,9 @@ def render_sidebyside(
             anchor = sites_model[finite].mean(0)
             obs_model = world_to_model(obs_world[t], s, rot, trans)
 
+            real_all, present = reader(bout_start_frame + t)
             rows = []
-            for cn in cams:
+            for k, cn in enumerate(cams):
                 ci = list(rig.cameras).index(cn)
                 pos, quat, fovy = mujoco_camera_from_affine(
                     rig.matrices_f64[ci].T,
@@ -199,11 +215,10 @@ def render_sidebyside(
                 rig_uv = np.asarray(rig.project(fitted_world[finite]))[:, ci, :]
                 checks[f"f{t}_{cn}_px"] = float(np.median(np.linalg.norm(mj_uv - rig_uv, axis=-1)))
 
-                caps[cn].set(cv2.CAP_PROP_POS_FRAMES, bout_start_frame + t)
-                okf, real = caps[cn].read()
-                if not okf:
+                if not present[k]:
                     print(f"could not read {cn} frame {bout_start_frame + t}")
                     continue
+                real = cv2.cvtColor(real_all[k], cv2.COLOR_RGB2BGR)
 
                 vis = conf2d[t, ci] > 0.3
                 _draw(real, kp2d[t, ci], vis, PALETTE["white"], chains_idx)
@@ -246,8 +261,7 @@ def render_sidebyside(
             w = min(r.shape[1] for r in rows)
             frame_imgs.append(np.vstack([r[:h, :w] for r in rows]))
     finally:
-        for c in caps.values():
-            c.release()
+        reader.close()
 
     if not frame_imgs:
         raise ValueError(
