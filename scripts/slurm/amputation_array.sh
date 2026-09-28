@@ -28,6 +28,8 @@ CONCURRENCY=""
 # Empty means "take the profile's own constraint"; set to narrow the GPU types.
 CONSTRAINT=""
 RECORDINGS=""
+# Comma-separated; e.g. ik,postprocess,collect to re-solve IK on an existing run.
+STAGES="bouts,ingest3d,preprocess,ik,postprocess,collect"
 DRY=0
 
 while [ $# -gt 0 ]; do
@@ -39,6 +41,7 @@ while [ $# -gt 0 ]; do
         --concurrency)   CONCURRENCY="$2"; shift 2 ;;
         --constraint)    CONSTRAINT="$2"; shift 2 ;;
         --recordings)    RECORDINGS="$2"; shift 2 ;;
+        --stages)        STAGES="$2"; shift 2 ;;
         --dry-run)       DRY=1; shift ;;
         *) echo "unknown arg: $1" >&2; exit 2 ;;
     esac
@@ -47,7 +50,7 @@ done
 [ -n "$RUN_NAME" ] || {
     echo "usage: $0 --run-name NAME [--data-root DIR] [--manifest-dir DIR]" >&2
     echo "          [--slurm PROFILE] [--concurrency N] [--constraint EXPR]" >&2
-    echo "          [--recordings id1,id2,...] [--dry-run]" >&2
+    echo "          [--recordings id1,id2,...] [--stages s1,s2,...] [--dry-run]" >&2
     echo "  --run-name is REQUIRED: the pipeline's own default is 'debug'," >&2
     echo "  which must never name a real campaign's outputs." >&2
     exit 2
@@ -172,7 +175,7 @@ BODY+='[ -n "$_REC" ] || { echo "no manifest line for task $SLURM_ARRAY_TASK_ID"
 BODY+="echo \"recording: \$_REC\"; "
 BODY+="python -m tracking.run recording=amputation \"recording.id='\$_REC'\" "
 BODY+="ik=amputation anatomy=v1 run.name=$(printf '%q' "$RUN_NAME") "
-BODY+="'stages=[bouts,ingest3d,preprocess,ik,postprocess,collect]'"
+BODY+="'stages=[$STAGES]'"
 
 # `%N` is appended only when a cap was actually asked for.
 _CAP="${CONCURRENCY:-$SL_MAX_CONCURRENT}"
