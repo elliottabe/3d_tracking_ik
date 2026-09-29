@@ -60,12 +60,25 @@ def _draw(img, uv, ok, colour, chains_idx, *, radius=3, thickness=1):
         cv2.circle(img, (int(round(uv[i, 0])), int(round(uv[i, 1]))), radius, colour, -1)
 
 
-def _sample_frames(n_qpos: int, frames, n_preview_frames: int) -> list[int]:
-    """Bout-relative frame indices to render -- see this module's docstring."""
+def _sample_frames(n_qpos: int, frames, n_preview_frames: int, max_frames: int | None = 0) -> list[int]:
+    """Bout-relative frame indices to render.
+
+    Precedence: explicit `frames`; else a contiguous `0..min(n_qpos, max_frames)-1`
+    sequence (`max_frames=None` = the whole bout); else (`max_frames=0`)
+    `n_preview_frames` spread evenly across the bout.
+
+    Example:
+        >>> _sample_frames(1000, None, 8, max_frames=300)[-1]
+        299
+    """
     if frames is not None:
         return sorted({int(t) for t in frames if 0 <= int(t) < n_qpos})
     if n_qpos <= 0:
         return []
+    if max_frames is None:
+        return list(range(n_qpos))
+    if int(max_frames) > 0:
+        return list(range(min(int(max_frames), n_qpos)))
     n = max(1, min(int(n_preview_frames), n_qpos))
     idx = np.linspace(0, n_qpos - 1, n)
     return sorted({int(round(i)) for i in idx})
@@ -85,6 +98,7 @@ def render_sidebyside(
     cameras=None,
     frames=None,
     n_preview_frames: int = 8,
+    max_frames: int | None = 0,
     geom_size: float = 0.004,
     pad: int = 170,
     fps: float = 4.0,
@@ -139,7 +153,7 @@ def render_sidebyside(
         offsets = np.asarray(f["offsets"][()], np.float64)
     sites_all = fitted_site_xpos_from_qpos(anatomy, qpos, offsets)
 
-    frame_idxs = _sample_frames(qpos.shape[0], frames, n_preview_frames)
+    frame_idxs = _sample_frames(qpos.shape[0], frames, n_preview_frames, max_frames)
     if not frame_idxs:
         raise ValueError(f"{fly_dir}: qpos has {qpos.shape[0]} frames -- nothing to sample")
 

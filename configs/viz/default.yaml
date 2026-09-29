@@ -9,22 +9,21 @@
 # `src/tracking/viz/sidebyside.py`'s module docstring for the render itself.
 sidebyside:
   # Bout-relative frame indices to render (the `qpos`/`kp3d` axis, NOT an
-  # absolute video frame number). `null` samples `n_preview_frames` indices
-  # evenly across the bout (`render_sidebyside._sample_frames`), so the same
-  # knob gives a representative preview whether the bout is 40 or 4000
-  # frames long -- nobody picks a frame number by hand. Set to an explicit
-  # list (e.g. `[0, 250, 500]`) to render only those.
+  # absolute video frame number); an explicit list overrides the two below.
   frames: null
+  # Contiguous sequence from the bout start, capped at this many frames (the
+  # old pipeline's `outputs.sidebyside_frames`). null = whole bout; 0 falls
+  # back to `n_preview_frames` spread evenly across the bout.
+  max_frames: 300
   n_preview_frames: 8
-  # Camera names to render, in `rig.cameras` order; `null` = every camera in
-  # the rig.
+  # Camera names to render; `null` = the one camera with the best median 2D
+  # confidence, "all" = every camera in the rig.
   cameras: null
   # Marker sphere radius, MODEL units (a fly spans ~0.25) -- the original
   # script's default, unchanged by the extraction.
   geom_size: 0.004
   # Crop half-width/height, pixels, around the fly in the REAL camera frame.
   pad: 170
-  # Low on purpose: `sidebyside.mp4` is a handful of SAMPLED frames spread
-  # across the whole bout (not consecutive playback, unlike `kpvideo`), so a
-  # kpvideo-like 30 fps would flash past before any one frame is readable.
-  fps: 4.0
+  # Playback rate for the contiguous sequence; drop to ~4 for the sparse
+  # `max_frames: 0` preview, whose frames would otherwise flash past.
+  fps: 30.0

@@ -215,6 +215,7 @@ def _execute(work: P.Work, cfg: DictConfig, ctx: dict[str, Any], bout_ids: list[
                 cameras=_plain(cfg.viz.sidebyside.cameras),
                 frames=_plain(cfg.viz.sidebyside.frames),
                 n_preview_frames=int(cfg.viz.sidebyside.n_preview_frames),
+                max_frames=_plain(cfg.viz.sidebyside.max_frames),
                 geom_size=float(cfg.viz.sidebyside.geom_size),
                 pad=int(cfg.viz.sidebyside.pad),
                 fps=float(cfg.viz.sidebyside.fps),
