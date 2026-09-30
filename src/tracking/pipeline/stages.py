@@ -75,7 +75,8 @@ STAGES: tuple[Stage, ...] = (
         "collect",
         "session",
         ("bouts",),
-        ("session_qc.json", "session_qc.md", "ik_output_combined.h5"),
+        # Filled in by recording_stages.collect_session; resume "always" never checks it.
+        ("session_qc.json", "session_qc.md", "ik_output_combined_{anatomy}_{run_name}.h5"),
         "always",
     ),
 )
