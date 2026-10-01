@@ -59,18 +59,48 @@ of the same name exists on PyPI and will not work.
 The two detector checkpoints are too large to ship in this repository and are
 archived separately:
 
-> **Data availability.** Model checkpoints (MVQ v2, 782 MB; CenterDetect,
-> 8.9 MB) and the example bout's video clips (`example_bout_clips.zip`,
-> 105 MB — see [Try it on one bout](#try-it-on-one-bout)) are deposited at
+> **Data availability.** Model checkpoints and the example bout's video clips
+> are deposited
 > [here](https://drive.google.com/drive/folders/1flBiyFmJYWPA6EIN4Xoh_2Lc5VT2_AoV?usp=drive_link).
 
-Download and unpack them, then point `paths.ckpt_dir` at the directory that
-holds `jax_mvq_runs/` and `jax_centerdetect_runs/`. To verify placement before
-starting a run:
+| Archive | Size | Holds |
+|---|---|---|
+| `mvq_lifter_bundle.zip` | 818 MB | MVQ v2 lifter, `checkpoint/final/` (plus a standalone loader) |
+| `centerdetect_ckpt.zip` | 8.4 MB | CenterDetect `cd_focal_bg30`, epoch 15 |
+| `example_bout_clips.zip` | 105 MB | One bout's clips — see [Try it on one bout](#try-it-on-one-bout) |
+
+Both checkpoints must sit under one directory, `paths.ckpt_dir`, in this
+layout:
+
+```
+<ckpt_dir>/
+├── jax_mvq_runs/
+│   └── mvq_t2_v2_20260906d/
+│       └── final/                 # from mvq_lifter_bundle/checkpoint/final
+└── jax_centerdetect_runs/
+    └── cd_focal_bg30/
+        ├── ckpt/epoch_015/
+        ├── metrics.json
+        └── summary.json
+```
+
+`centerdetect_ckpt.zip` already unpacks into this layout. The MVQ bundle is a
+standalone inference package, so its `final/` has to be moved into place; the
+rest of the bundle (`src/`, `load_lifter.py`) is not used by the pipeline.
 
 ```bash
-python scripts/fetch_assets.py             # human-readable report
-python scripts/fetch_assets.py --json      # machine-readable
+CKPT=/path/to/ckpts                # becomes paths.ckpt_dir
+mkdir -p $CKPT/jax_mvq_runs/mvq_t2_v2_20260906d
+unzip mvq_lifter_bundle.zip -d /tmp/mvq
+mv /tmp/mvq/mvq_lifter_bundle/checkpoint/final $CKPT/jax_mvq_runs/mvq_t2_v2_20260906d/
+unzip centerdetect_ckpt.zip -d $CKPT
+```
+
+To verify placement before starting a run:
+
+```bash
+python scripts/fetch_assets.py --ckpt-dir $CKPT    # human-readable report
+python scripts/fetch_assets.py --json              # machine-readable, default paths group
 ```
 
 It resolves the same config a real run does and names any missing asset in a
@@ -109,9 +139,24 @@ needs: seven synchronised camera clips (726 frames of two flies at 800 Hz),
 the calibration they were shot under, and the outputs a reference run
 produced from exactly these pixels.
 
-The clips are ~105 MB and live outside git — download
-`example_bout_clips.zip` from the same folder as the model checkpoints and
-unpack it into `data/example_bout/`, then:
+The clips are ~105 MB and live outside git. Unpack the two checkpoints as in
+[Model weights](#model-weights), set `ckpt_dir` in your `paths` config (see
+[Configure](#configure)), then unpack the clips into `data/example_bout/`:
+
+```bash
+unzip example_bout_clips.zip -d data/example_bout
+```
+
+```
+data/example_bout/
+├── Cam2012630.mp4 … Cam2012862.mp4   # 7 clips, names match configs/recording/example.yaml
+├── calibration/                      # Cam*.yaml + Cam*_dlt.csv per camera
+├── bout_summary.csv                  # the bout table the `bouts` stage reads
+├── clip_manifest.json
+└── README.md
+```
+
+Then:
 
 ```bash
 python -m tracking.run recording=example paths=mymachine \
